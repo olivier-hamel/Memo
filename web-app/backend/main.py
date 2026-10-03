@@ -1,4 +1,5 @@
 """FastAPI app with isolated study sessions; run one Uvicorn worker."""
+import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,7 +36,7 @@ class Action(BaseModel):
     revision: str
     correct: StrictBool | None = None
     direction: StrictInt | None = None
-    mode: Literal["LEARN", "REVIEW"] | None = None
+    mode: Literal["LEARN"] | None = None
     response: str | None = None
     typed: StrictBool | None = None
 
@@ -122,6 +123,15 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
             raise HTTPException(403, "La bibliothèque MongoDB n’est pas activée.")
         return current_user(request), app.state.decks
 
+    def local_set(request):
+        if auth_enabled:
+            current_user(request)
+        source = raw_cards if raw_cards is not None else json.loads((DATA_DIR / "flashcards.json").read_text(encoding="utf-8"))
+        return dict(id=DEFAULT_SET_ID, title="Éthique de l’ingénieur", description="L’ensemble d’origine de Mémo.",
+                    editable=False, shared=False, revision="local", latest_version=1, version=1,
+                    versions=[dict(version=1, card_count=len(source))],
+                    cards=[dict(term=term, definition=definition) for term, definition in source])
+
     def study_for(request, set_id=None, version=None):
         if not auth_enabled:
             return app.state.study, app.state.lock
@@ -149,12 +159,19 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
     @app.get("/api/sets")
     def sets(request: Request):
         if app.state.decks is None or not auth_enabled:
-            return {"enabled": False, "sets": []}
+            deck = local_set(request)
+            return {"enabled": False, "default_set_id": DEFAULT_SET_ID,
+                    "sets": [{key: value for key, value in deck.items() if key not in ("cards", "version")}]}
         user, repository = library_for(request)
         return {"enabled": True, "default_set_id": DEFAULT_SET_ID, "sets": repository.list(user)}
 
     @app.get("/api/sets/{identifier}")
     def get_set(identifier: str, request: Request, version: int | None = Query(default=None, ge=1)):
+        if app.state.decks is None or not auth_enabled:
+            deck = local_set(request)
+            if identifier != DEFAULT_SET_ID or version not in (None, 1):
+                raise HTTPException(404, "Ensemble introuvable.")
+            return deck
         user, repository = library_for(request)
         return repository.get(user, identifier, version)
 

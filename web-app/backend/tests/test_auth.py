@@ -45,6 +45,8 @@ class AccountApiTests(unittest.TestCase):
 
     def test_auth_required_and_https_cookie(self):
         self.assertEqual(self.client.get("/api/state").status_code, 401)
+        self.assertEqual(self.client.get("/api/sets").status_code, 401)
+        self.assertEqual(self.client.get("/api/sets/default-ethics").status_code, 401)
         self.assertEqual(self.client.get("/api/auth/me").status_code, 401)
         self.assertEqual(self.client.get("/api/health").status_code, 200)
         response = self.login()

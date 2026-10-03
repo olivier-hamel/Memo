@@ -1,6 +1,6 @@
 export type CardState = 'NEW' | 'UNTESTED' | 'LEARNING' | 'FAMILIAR' | 'MASTERED'
 export type RoundStatus = 'LOCKED' | 'ACTIVE' | 'COMPLETED'
-export type Mode = 'LEARN' | 'REVIEW'
+export type Mode = 'LEARN'
 export type CardInput = { term: string; definition: string }
 export type CardSet = {
   id: string; title: string; description: string; editable: boolean; shared: boolean

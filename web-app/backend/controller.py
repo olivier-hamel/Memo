@@ -47,6 +47,8 @@ class WebStudy:
                 data["config"]["allow_multiple_choice"] = False
                 data["config"]["allow_reverse_direction"] = False
             self.session.restore(data)
+            if self.session.mode == "REVIEW":
+                self.session.set_mode("LEARN")
         self.load_next()
         self.save()
 
@@ -166,13 +168,11 @@ class WebStudy:
             view.typed_response = action.response
             self.record(response == " ".join(view.question.answer.casefold().split()))
         elif kind == "mode":
-            if action.mode not in ("LEARN", "REVIEW"):
+            if action.mode != "LEARN":
                 raise InvalidAction("Mode inconnu.")
-            if action.mode == "REVIEW" and not any(r.status == RoundStatus.COMPLETED for r in self.session.rounds):
-                raise InvalidAction("Termine un groupe pour débloquer les révisions.")
             if action.mode != self.session.mode:
                 self.session.set_mode(action.mode)
-                self.notice = "Révisions espacées des groupes terminés." if action.mode == "REVIEW" else ""
+                self.notice = ""
                 self.load_next()
         elif kind == "settings":
             if type(action.typed) is not bool:

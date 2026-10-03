@@ -1,118 +1,164 @@
-import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, BookOpen, Flower2, Layers3, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ArrowRight, BookOpen, ChevronDown, Flower2, Layers3, LibraryBig, LockKeyhole, LogOut, Plus, Search, Settings2, Sprout, Users, X } from 'lucide-react'
 import App from './App'
+import Dialog from './Dialog'
+import SetDetail from './SetDetail'
 import { useAccount } from './AuthGate'
-import { apiFetch } from './api'
-import type { CardInput, CardSet, CardSetDetail, SetSelection } from './types'
-
-async function read<T>(path: string, body?: unknown): Promise<T> {
-  const response = await apiFetch(path, body === undefined ? { cache: 'no-store' } : { method: 'POST', body: JSON.stringify(body) })
-  const data = await response.json()
-  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Vérifie les informations saisies.')
-  return data as T
-}
+import { readLibrary } from './libraryApi'
+import type { CardSet, CardSetDetail, SetSelection } from './types'
+import './library.css'
 
 type Library = { enabled: boolean; default_set_id?: string; sets: CardSet[] }
-const blankCard = (): CardInput => ({ term: '', definition: '' })
+type Route = { screen: 'library' } | { screen: 'new' } | { screen: 'set' | 'study'; id: string; version?: number }
 
-function SetEditor({ original, saved, cancel }: { original: CardSetDetail | null; saved: (deck: CardSetDetail) => void; cancel: () => void }) {
-  const [title, setTitle] = useState(original?.title || '')
-  const [description, setDescription] = useState(original?.description || '')
-  const [cards, setCards] = useState<CardInput[]>(original?.cards || [blankCard()])
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  return <form className="set-editor" onSubmit={async event => {
-    event.preventDefault()
-    if (busy) return
-    setBusy(true); setError('')
-    try {
-      saved(await read<CardSetDetail>(original ? `sets/${original.id}` : 'sets', {
-        title, description, cards, revision: original?.revision,
-      }))
-    } catch (caught) { setError((caught as Error).message) }
-    finally { setBusy(false) }
-  }}>
-    <div className="library-heading"><div><span className="eyebrow">UN ENSEMBLE À TON IMAGE</span><h1>{original ? 'Affiner tes cartes.' : 'Une nouvelle idée à cultiver.'}</h1></div><button className="secondary-button" type="button" onClick={cancel} disabled={busy}>Annuler</button></div>
-    <p className="library-intro">{original ? 'Modifier les questions ou les réponses crée une nouvelle version. Tes acquis restent disponibles dans les versions précédentes.' : 'Ton nouvel ensemble est privé. Ajoute des questions claires et les réponses que tu souhaites retenir.'}</p>
-    {error && <div className="auth-error" role="alert">{error}</div>}
-    <fieldset disabled={busy}>
-      <label>Titre de l’ensemble<input value={title} onChange={event => setTitle(event.target.value)} required maxLength={100} /></label>
-      <label>Description <span>(facultative)</span><textarea value={description} onChange={event => setDescription(event.target.value)} maxLength={1000} rows={2} /></label>
-      <div className="editor-cards">
-        {cards.map((card, index) => <section className="editor-card" key={index} aria-label={`Carte ${index + 1}`}>
-          <div className="editor-card-heading"><strong>Carte {index + 1}</strong><button className="icon-button" type="button" aria-label={`Supprimer la carte ${index + 1}`} disabled={cards.length === 1} onClick={() => setCards(current => current.filter((_, i) => i !== index))}><Trash2 size={16} /></button></div>
-          <label>Question {index + 1}<textarea value={card.term} required maxLength={2000} rows={2} onChange={event => setCards(current => current.map((c, i) => i === index ? { ...c, term: event.target.value } : c))} /></label>
-          <label>Réponse {index + 1}<textarea value={card.definition} required maxLength={12000} rows={3} onChange={event => setCards(current => current.map((c, i) => i === index ? { ...c, definition: event.target.value } : c))} /></label>
-        </section>)}
-      </div>
-      <button className="secondary-button add-card" type="button" disabled={cards.length >= 300} onClick={() => setCards(current => [...current, blankCard()])}><Plus size={16} /> Ajouter une carte</button>
-      <div className="editor-footer"><span>{cards.length} carte{cards.length > 1 ? 's' : ''}</span><button className="primary-button" type="submit">{busy ? 'Enregistrement…' : 'Enregistrer l’ensemble'}<ArrowRight size={17} /></button></div>
-    </fieldset>
-  </form>
+function getRoute(): Route {
+  const parts = window.location.hash.slice(1).split('/')
+  if (parts[0] === 'new') return { screen: 'new' }
+  if ((parts[0] === 'sets' || parts[0] === 'study') && parts[1]) {
+    const version = Number(parts[2])
+    return { screen: parts[0] === 'sets' ? 'set' : 'study', id: parts[1], version: Number.isSafeInteger(version) && version > 0 ? version : undefined }
+  }
+  return { screen: 'library' }
+}
+function routeHash(route: Route) {
+  return route.screen === 'library' ? '' : route.screen === 'new' ? '#new' : `#${route.screen === 'set' ? 'sets' : 'study'}/${route.id}${route.version ? `/${route.version}` : ''}`
+}
+const detailKey = (route: Route) => route.screen === 'set' ? `${route.id}:${route.version || 'latest'}` : ''
+
+function SetLibrary({ library, recent, open, create, study }: {
+  library: Library; recent: SetSelection | null; open: (deck: CardSet) => void; create: () => void; study: (selection: SetSelection) => void
+}) {
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState<'all' | 'private' | 'shared'>('all')
+  const [sort, setSort] = useState('recent')
+  const query = search.trim().toLocaleLowerCase('fr')
+  const decks = library.sets.filter(deck => `${deck.title} ${deck.description}`.toLocaleLowerCase('fr').includes(query) && (filter === 'all' || (filter === 'shared' ? deck.shared : !deck.shared)))
+  if (sort === 'title') decks.sort((a, b) => a.title.localeCompare(b.title, 'fr'))
+  if (sort === 'cards') decks.sort((a, b) => (b.versions.at(-1)?.card_count || 0) - (a.versions.at(-1)?.card_count || 0))
+  const cardCount = library.sets.reduce((sum, deck) => sum + (deck.versions.at(-1)?.card_count || 0), 0)
+  const recentDeck = recent && library.sets.find(deck => deck.id === recent.id && deck.versions.some(version => version.version === recent.version))
+
+  return <>
+    <div className="collection-heading">
+      <div><div className="collection-eyebrow"><span />TA BIBLIOTHÈQUE</div><h1>Mes ensembles<span>.</span></h1><p>Toutes tes idées, au même endroit. Un peu de savoir, chaque jour.</p></div>
+      {library.enabled && <button className="primary-button" onClick={create}><Plus size={18} />Nouvel ensemble</button>}
+    </div>
+    <div className="collection-summary"><span><Layers3 size={16} /><strong>{library.sets.length}</strong> ensemble{library.sets.length > 1 ? 's' : ''}</span><span className="summary-separator" /><span><BookOpen size={16} /><strong>{cardCount}</strong> carte{cardCount > 1 ? 's' : ''}</span><span className="collection-summary-note"><Sprout size={15} />À ton rythme.</span></div>
+    {recentDeck && recent && <button className="resume-session" onClick={() => study({ ...recent, title: recentDeck.title })}><span className="resume-icon"><BookOpen size={23} /></span><span className="resume-copy"><span>POURSUIVRE L’APPRENTISSAGE</span><strong>{recentDeck.title}</strong><small>Version {recent.version} · Ta progression t’attend.</small></span><span className="resume-action">Reprendre<ArrowRight size={18} /></span></button>}
+    <div className="collection-toolbar">
+      <div className="collection-filters" aria-label="Filtrer les ensembles">{([{ id: 'all', label: 'Tous les ensembles' }, { id: 'private', label: 'Personnels' }, { id: 'shared', label: 'Partagés' }] as const).map(item => <button key={item.id} className={filter === item.id ? 'selected' : ''} aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}{item.id === 'all' && <span>{library.sets.length}</span>}</button>)}</div>
+      <label className="collection-search"><Search size={17} /><input aria-label="Rechercher un ensemble" placeholder="Rechercher un ensemble…" value={search} onChange={event => setSearch(event.target.value)} />{search && <button className="icon-button" aria-label="Effacer la recherche d’ensembles" onClick={() => setSearch('')}><X size={15} /></button>}</label>
+    </div>
+    <div className="collection-list-heading"><h2>{query ? `Résultats pour « ${search.trim()} »` : filter === 'private' ? 'Tes ensembles personnels' : filter === 'shared' ? 'Les ensembles partagés' : 'Tous tes ensembles'}<span>{decks.length}</span></h2><label className="collection-sort"><span className="sr-only">Trier les ensembles</span><select aria-label="Trier les ensembles" value={sort} onChange={event => setSort(event.target.value)}><option value="recent">Les plus récents</option><option value="title">Par titre</option><option value="cards">Nombre de cartes</option></select><ChevronDown size={14} /></label></div>
+    <div className="collection-grid">{decks.map((deck, index) => <button className={`collection-tile tone-${index % 4}`} key={deck.id} onClick={() => open(deck)} aria-label={`Ouvrir ${deck.title}`}>
+      <div className="collection-tile-cover"><span className="tile-cover-index">{String(index + 1).padStart(2, '0')} / ENSEMBLE</span><div className="tile-cover-art" aria-hidden="true"><Layers3 size={49} strokeWidth={1.15} /></div><span className="tile-card-count">{deck.versions.at(-1)?.card_count || 0} cartes</span></div>
+      <div className="collection-tile-body"><span className={`tile-privacy ${deck.shared ? 'shared' : ''}`}>{deck.shared ? <Users size={13} /> : <LockKeyhole size={12} />}{deck.shared ? 'Partagé' : 'Personnel'}</span><h3>{deck.title}</h3><p>{deck.description || ' '}</p><div className="collection-tile-footer"><span>Voir les cartes</span><ArrowRight size={18} /></div></div>
+    </button>)}
+      {library.enabled && !query && filter !== 'shared' && <button className="collection-create-tile" onClick={create}><span className="create-tile-icon"><Plus size={27} strokeWidth={1.6} /></span><strong>Une nouvelle idée ?</strong><p>Crée un ensemble de cartes<br />et fais grandir tes connaissances.</p><span>Créer un ensemble<ArrowRight size={15} /></span></button>}
+    </div>
+    {!decks.length && <div className="collection-empty"><div><Search size={30} strokeWidth={1.4} /></div><h2>{query ? 'Aucun ensemble trouvé.' : 'Une bibliothèque à faire grandir.'}</h2><p>{query ? 'Essaie un autre mot ou un titre différent.' : filter === 'shared' ? 'Les ensembles partagés apparaîtront ici.' : 'Tes ensembles de cartes apparaîtront ici.'}</p>{(query || filter !== 'all') && <button className="secondary-button" onClick={() => { setSearch(''); setFilter('all') }}>Voir tous les ensembles</button>}</div>}
+    <div className="collection-footnote"><Flower2 size={15} strokeWidth={1.5} /><span>Une carte à la fois, les idées deviennent des acquis.</span></div>
+  </>
 }
 
 export default function StudyHome() {
   const account = useAccount()
   const [library, setLibrary] = useState<Library | null>(null)
-  const [selection, setSelection] = useState<SetSelection | null>(null)
-  const [screen, setScreen] = useState<'study' | 'library' | 'editor'>('study')
-  const [original, setOriginal] = useState<CardSetDetail | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [route, setRoute] = useState<Route>(getRoute)
+  const routeRef = useRef(route)
+  routeRef.current = route
+  const dirtyRef = useRef(false)
+  const [pendingRoute, setPendingRoute] = useState<Route | null>(null)
+  const [detail, setDetail] = useState<{ key: string; deck: CardSetDetail } | null>(null)
   const [error, setError] = useState('')
+  const [detailError, setDetailError] = useState('')
+  const [retry, setRetry] = useState(0)
   const storageKey = `memo:selected-set:${account?.user.username || 'local'}`
+  const [recent, setRecent] = useState<SetSelection | null>(() => {
+    try { return JSON.parse(localStorage.getItem(storageKey) || 'null') } catch { return null }
+  })
 
   const load = useCallback(async () => {
-    try {
-      const data = await read<Library>('sets')
-      setLibrary(data); setError('')
-    } catch (caught) { setError((caught as Error).message) }
+    try { setLibrary(await readLibrary<Library>('sets')); setError('') }
+    catch (caught) { setError((caught as Error).message) }
   }, [])
   useEffect(() => { void load() }, [load])
+  const commit = useCallback((next: Route, replace = false) => {
+    const url = `${window.location.pathname}${window.location.search}${routeHash(next)}`
+    window.history[replace ? 'replaceState' : 'pushState'](null, '', url)
+    routeRef.current = next
+    setRoute(next); setDetailError('')
+    window.scrollTo(0, 0)
+  }, [])
+  const navigate = useCallback((next: Route) => {
+    if (dirtyRef.current) { setPendingRoute(next); return }
+    commit(next)
+  }, [commit])
+  const onDirty = useCallback((dirty: boolean) => { dirtyRef.current = dirty }, [])
   useEffect(() => {
-    if (!library?.enabled || selection) return
-    let saved: SetSelection | null = null
-    try { saved = JSON.parse(localStorage.getItem(storageKey) || 'null') } catch { /* First visit or unavailable storage. */ }
-    const matching = saved && library.sets.find(deck => deck.id === saved!.id && deck.versions.some(v => v.version === saved!.version))
-    const defaultSet = library.sets.find(deck => deck.id === library.default_set_id)
-    if (matching && saved) setSelection({ id: matching.id, title: matching.title, version: saved.version })
-    else if (defaultSet) setSelection({ id: defaultSet.id, title: defaultSet.title, version: 1 })
-    else setScreen('library')
-  }, [library, selection, storageKey])
+    const changed = () => {
+      const next = getRoute()
+      if (dirtyRef.current) {
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${routeHash(routeRef.current)}`)
+        setPendingRoute(next)
+      } else { routeRef.current = next; setRoute(next); setDetailError(''); window.scrollTo(0, 0) }
+    }
+    window.addEventListener('hashchange', changed)
+    return () => window.removeEventListener('hashchange', changed)
+  }, [])
+  const key = detailKey(route)
+  useEffect(() => {
+    if (route.screen !== 'set' || !library || detail?.key === key) return
+    let cancelled = false
+    setDetailError('')
+    void readLibrary<CardSetDetail>(`sets/${route.id}${route.version ? `?version=${route.version}` : ''}`).then(deck => {
+      if (!cancelled) setDetail({ key, deck })
+    }).catch(caught => { if (!cancelled) setDetailError((caught as Error).message) })
+    return () => { cancelled = true }
+  }, [route, library, detail?.key, key, retry])
+  useEffect(() => {
+    const title = route.screen === 'library' ? 'Mes ensembles' : route.screen === 'new' ? 'Nouvel ensemble' : library?.sets.find(deck => deck.id === route.id)?.title || 'Ensemble'
+    document.title = `${title} · mémo`
+  }, [route, library])
 
-  const select = (deck: CardSet, version: number) => {
-    const chosen = { id: deck.id, title: deck.title, version }
-    setSelection(chosen); setScreen('study'); setError('')
-    try { localStorage.setItem(storageKey, JSON.stringify(chosen)) } catch { /* Selection still works without local storage. */ }
+  const home = () => { navigate({ screen: 'library' }); void load() }
+  const startStudy = (selection: SetSelection) => {
+    setRecent(selection)
+    try { localStorage.setItem(storageKey, JSON.stringify(selection)) } catch { /* Studying also works without browser storage. */ }
+    navigate({ screen: 'study', id: selection.id, version: selection.version })
   }
-  const edit = async (deck: CardSet) => {
-    if (busy) return
-    setBusy(true); setError('')
-    try { setOriginal(await read<CardSetDetail>(`sets/${deck.id}`)); setScreen('editor') }
-    catch (caught) { setError((caught as Error).message) }
-    finally { setBusy(false) }
+  const saveDetail = (deck: CardSetDetail) => {
+    dirtyRef.current = false
+    setLibrary(current => current && { ...current, sets: [deck, ...current.sets.filter(item => item.id !== deck.id)] })
+    setDetail({ key: `${deck.id}:latest`, deck })
+    commit({ screen: 'set', id: deck.id }, true)
   }
+
   if (!library) return <div className="boot-screen"><Flower2 size={34} /><h1>mémo.</h1>{error ? <><p role="alert">{error}</p><button className="primary-button" onClick={() => void load()}>Réessayer</button></> : <p>Ta bibliothèque se prépare…</p>}</div>
-  if (!library.enabled) return <App />
-  if (screen === 'study' && selection) return <App key={`${selection.id}:${selection.version}`} deck={selection} onLibrary={() => { setScreen('library'); void load() }} />
-  return <div className="library-shell">
-    <header className="library-topbar"><span className="library-brand"><Flower2 size={27} /> mémo.</span><span>{account?.user.display_name}</span>{selection && <button className="secondary-button" onClick={() => setScreen('study')} disabled={busy}><ArrowLeft size={15} /> Revenir aux cartes</button>}</header>
-    <main className="library-main">
-      {screen === 'editor' ? <SetEditor key={original ? `${original.id}:${original.revision}` : 'new'} original={original} cancel={() => setScreen('library')} saved={deck => {
-        void load()
-        select(deck, deck.latest_version)
-      }} /> : <>
-        <div className="library-heading"><div><span className="eyebrow">TON SAVOIR PREND RACINE</span><h1>Mes ensembles.</h1></div><button className="primary-button" onClick={() => { setOriginal(null); setScreen('editor'); setError('') }}><Plus size={17} /> Nouvel ensemble</button></div>
-        <p className="library-intro">Choisis un ensemble pour reprendre ou crée tes propres cartes. Chaque version garde sa progression.</p>
-        {error && <div className="auth-error" role="alert">{error}<button className="auth-secondary" onClick={() => void load()}>Réessayer</button></div>}
-        {!library.sets.length && <div className="library-empty"><Layers3 size={34} /><p>Un peu de place pour tes prochaines idées.</p></div>}
-        <div className="set-grid">{library.sets.map(deck => <section className="set-tile" key={deck.id} aria-label={deck.title}>
-          <div className="set-tile-top"><BookOpen size={23} /><span>{deck.shared ? 'Ensemble partagé' : 'Mon ensemble privé'}</span></div>
-          <h2>{deck.title}</h2><p>{deck.description}</p>
-          <div className="set-versions"><span>{deck.versions.at(-1)?.card_count} cartes · Version {deck.latest_version}</span></div>
-          <div className="set-tile-actions"><button className="primary-button" disabled={busy} onClick={() => select(deck, deck.latest_version)}>Apprendre<ArrowRight size={15} /></button>{deck.editable && <button className="secondary-button" disabled={busy} onClick={() => void edit(deck)} aria-label={`Modifier ${deck.title}`}><Pencil size={15} /> Modifier</button>}</div>
-          {deck.versions.length > 1 && <label className="older-version">Reprendre une version précédente<select aria-label={`Version de ${deck.title}`} value="" onChange={event => select(deck, Number(event.target.value))}><option value="" disabled>Choisir une version</option>{deck.versions.slice(0, -1).map(v => <option key={v.version} value={v.version}>Version {v.version} · {v.card_count} cartes</option>)}</select></label>}
-        </section>)}</div>
-      </>}
-    </main>
+  if (route.screen === 'study') {
+    const deck = library.sets.find(item => item.id === route.id)
+    const selection = { id: route.id, title: deck?.title || 'Mon ensemble', version: route.version || deck?.latest_version || 1 }
+    return <App key={`${selection.id}:${selection.version}`} deck={library.enabled ? selection : undefined} onLibrary={home} onSet={() => navigate({ screen: 'set', id: selection.id, version: selection.version === deck?.latest_version ? undefined : selection.version })} />
+  }
+  const currentDetail = detail?.key === key ? detail.deck : null
+
+  return <div className="collection-shell">
+    <aside className="collection-sidebar">
+      <button className="collection-brand" onClick={home} aria-label="Mémo, accueil"><Flower2 size={29} strokeWidth={1.7} /><span>mémo<span>.</span></span></button>
+      <span className="collection-sidebar-caption">UN PEU CHAQUE JOUR.</span>
+      <nav aria-label="Navigation principale"><span className="collection-nav-label">MON ESPACE</span><button className="collection-nav-item active" onClick={home} aria-current={route.screen === 'library' ? 'page' : undefined}><LibraryBig size={19} /><span>Mes ensembles</span><span className="collection-nav-count">{library.sets.length}</span></button>{library.enabled && <button className="collection-nav-item" onClick={() => navigate({ screen: 'new' })}><Plus size={19} /><span>Créer un ensemble</span></button>}{account && <><button className="collection-nav-item" onClick={account.changePassword}><Settings2 size={19} /><span>Changer mon mot de passe</span></button><button className="collection-nav-item" onClick={account.logout}><LogOut size={19} /><span>Se déconnecter</span></button></>}</nav>
+      <div className="collection-sidebar-note"><span><Sprout size={29} strokeWidth={1.3} /></span><h2>Le savoir<br />se cultive.</h2><p>Une idée, une carte,<br />un petit pas chaque jour.</p><div className="sidebar-note-line" /></div>
+      <div className="collection-sidebar-footer"><span className="collection-avatar">{account?.user.display_name.charAt(0).toUpperCase() || 'M'}</span><div><strong>{account?.user.display_name || 'Mon espace'}</strong><span>À mon rythme</span></div><Sprout size={17} /></div>
+    </aside>
+    <div className="collection-workspace">
+      <main className="collection-main">
+        {error && <div className="detail-error" role="alert"><span>{error}</span><button onClick={() => void load()}>Réessayer</button></div>}
+        {route.screen === 'library' ? <SetLibrary library={library} recent={recent} open={deck => navigate({ screen: 'set', id: deck.id })} create={() => navigate({ screen: 'new' })} study={startStudy} /> : route.screen === 'new' && !library.enabled ? <div className="collection-empty"><LockKeyhole size={30} /><h1>La création d’ensembles est indisponible.</h1><p>Ouvre ta bibliothèque connectée pour créer tes cartes.</p><button className="secondary-button" onClick={home}>Revenir à mes ensembles</button></div> : route.screen === 'new' || currentDetail ? <SetDetail key={route.screen === 'new' ? 'new' : `${currentDetail!.id}:${currentDetail!.version}:${currentDetail!.revision}`} original={route.screen === 'new' ? null : currentDetail} canCreate={library.enabled} onBack={home} onDirty={onDirty} onSaved={saveDetail} onStudy={deck => startStudy({ id: deck.id, title: deck.title, version: deck.version })} onVersion={version => {
+          // A conflict reload also needs to go through the unsaved-edit guard.
+          if (route.screen === 'set') { navigate({ screen: 'set', id: route.id, version: version === currentDetail?.latest_version ? undefined : version }); if (!dirtyRef.current) { setDetail(null); setRetry(value => value + 1) } }
+        }} /> : <div className="collection-loading" role={detailError ? 'alert' : 'status'}><Layers3 size={32} strokeWidth={1.4} /><h2>{detailError || 'Tes cartes se préparent…'}</h2>{detailError && <div><button className="secondary-button" onClick={home}>Mes ensembles</button><button className="primary-button" onClick={() => setRetry(value => value + 1)}>Réessayer</button></div>}</div>}
+      </main>
+    </div>
+    {pendingRoute && <Dialog title="Modifications non enregistrées" onClose={() => setPendingRoute(null)}><p className="dialog-explanation">Tes modifications n’ont pas encore été enregistrées. Tu peux continuer à modifier tes cartes ou quitter cet ensemble.</p><div className="modal-actions"><button className="secondary-button" onClick={() => setPendingRoute(null)}>Continuer à modifier</button><button className="primary-button" onClick={() => { dirtyRef.current = false; setDetail(null); commit(pendingRoute); setPendingRoute(null) }}>Quitter sans enregistrer<ArrowRight size={16} /></button></div></Dialog>}
   </div>
 }

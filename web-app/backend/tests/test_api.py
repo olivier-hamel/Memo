@@ -48,6 +48,20 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(first["active_cards"]), 2)
         self.assertEqual(self.client.get("/api/state").headers["cache-control"], "no-store")
 
+    def test_local_library_lists_and_reads_cards_without_changing_study(self):
+        before = self.state()
+        library = self.client.get("/api/sets").json()
+        self.assertFalse(library["enabled"])
+        self.assertEqual(len(library["sets"]), 1)
+        deck = library["sets"][0]
+        self.assertFalse(deck["editable"])
+        self.assertNotIn("cards", deck)
+        detail = self.client.get("/api/sets/" + deck["id"]).json()
+        self.assertEqual(detail["cards"], [dict(term=term, definition=definition) for term, definition in CARDS])
+        self.assertEqual(self.client.get("/api/sets/" + deck["id"] + "?version=2").status_code, 404)
+        self.assertEqual(self.client.get("/api/sets/missing").status_code, 404)
+        self.assertEqual(self.state(), before)
+
     def test_must_reveal_before_grading_and_grade_is_strict_boolean(self):
         self.assertEqual(self.act("grade", correct=True).status_code, 400)
         self.assertEqual(self.act("grade", correct=1).status_code, 422)
@@ -184,8 +198,7 @@ class ApiTests(unittest.TestCase):
             WebStudy(source, None, CARDS)
         self.assertEqual(source.read_bytes(), before)
 
-    def test_review_unlock_initial_final_transitions_and_review_is_separate(self):
-        self.assertEqual(self.act("mode", mode="REVIEW").status_code, 400)
+    def test_initial_and_final_mastery_complete_and_reset_clears_all_progress(self):
         seen_final = False
         for _ in range(200):
             state = self.state()
@@ -199,30 +212,49 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(self.state()["complete"])
         self.assertEqual(self.state()["progress"], 1)
         self.assertEqual(self.state()["active_mastered"], 4)
-        initial = [copy.deepcopy(c.history) for c in self.app.state.study.session.cards]
-        final = [copy.deepcopy(c.final.history) for c in self.app.state.study.session.cards]
-        self.app.state.study.session.clock = lambda: 1e12
-        reviewed = self.act("mode", mode="REVIEW").json()
-        self.assertEqual(reviewed["mode"], "REVIEW")
-        self.assertIsNotNone(reviewed["question"])
-        self.grade(False)
-        self.assertEqual([c.history for c in self.app.state.study.session.cards], initial)
-        self.assertEqual([c.final.history for c in self.app.state.study.session.cards], final)
-        self.assertEqual(self.state()["progress"], 1)
-        self.assertTrue(self.state()["complete"])
+        reset = self.act("reset").json()
+        self.assertEqual(reset["mode"], "LEARN")
+        self.assertEqual(reset["phase"], "INITIAL_ROUND_LEARNING")
+        for key in ("correct", "wrong", "streak", "initial_mastered", "final_mastered", "progress", "active_round_index"):
+            self.assertEqual(reset[key], 0, key)
+        self.assertEqual([r["status"] for r in reset["rounds"]], ["ACTIVE", "LOCKED"])
+        self.assertEqual(reset["final_status"], "LOCKED")
+        self.assertFalse(reset["complete"])
+        self.assertEqual(reset["question"]["position"], 1)
+        for card in self.app.state.study.session.cards:
+            self.assertEqual(card.history, [])
+            self.assertEqual(card.final.history, [])
+            self.assertIsNone(card.review)
+        with TestClient(create_app(self.path, None, CARDS)) as restarted:
+            loaded = restarted.get("/api/state").json()
+            self.assertEqual(loaded["progress"], 0)
+            self.assertEqual(loaded["correct"], 0)
+            self.assertEqual(loaded["phase"], "INITIAL_ROUND_LEARNING")
 
-    def test_empty_review_queue_and_return_to_learning(self):
+    def test_web_review_mode_is_unavailable(self):
+        before = self.state()
+        self.assertEqual(self.act("mode", mode="REVIEW").status_code, 422)
+        self.assertEqual(self.state(), before)
+
+    def test_saved_review_session_returns_to_learning_without_losing_progress(self):
         for _ in range(100):
             if self.state()["review_available"]:
                 break
             self.grade()
-        self.assertTrue(self.state()["review_available"])
-        reviewed = self.act("mode", mode="REVIEW").json()
-        self.assertIsNone(reviewed["question"])
-        self.assertEqual(self.act("refresh").status_code, 200)
-        learned = self.act("mode", mode="LEARN").json()
-        self.assertEqual(learned["mode"], "LEARN")
-        self.assertIsNotNone(learned["question"])
+        before = self.state()
+        self.assertTrue(before["review_available"])
+        session = self.app.state.study.session
+        histories = [copy.deepcopy(card.history) for card in session.cards]
+        session.set_mode("REVIEW")
+        self.app.state.study.save()
+        with TestClient(create_app(self.path, None, CARDS)) as restarted:
+            loaded = restarted.get("/api/state").json()
+            self.assertEqual(loaded["mode"], "LEARN")
+            self.assertIsNotNone(loaded["question"])
+            for key in ("progress", "initial_mastered", "final_mastered", "correct", "wrong", "phase", "active_round_index"):
+                self.assertEqual(loaded[key], before[key], key)
+            self.assertEqual([card.history for card in restarted.app.state.study.session.cards], histories)
+        self.assertEqual(json.loads(self.path.read_text())["mode"], "LEARN")
 
 
 if __name__ == "__main__":
