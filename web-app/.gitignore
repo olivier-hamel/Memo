@@ -1,0 +1,11 @@
+.venv/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+backend/data/progress.json
+backend/data/.progress-*
+test-results/
+playwright-report/
+*.log
+*.tsbuildinfo

@@ -1,0 +1,15 @@
+.venv
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+**/*.tsbuildinfo
+**/.env*
+**/progress.json
+**/.progress-*
+**/accounts.sqlite3*
+**/users
+**/bootstrap
+**/test-results
+**/playwright-report
+**/*.log

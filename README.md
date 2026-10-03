@@ -1,1 +1,27 @@
-# Memo
+Run the app with `python3 flashcard_learn.py` (Python 3.10+ with Tkinter). No third-party packages are needed.
+
+The French React/FastAPI web app lives in [web-app](web-app/README.md).
+It supports a personal local session and a Docker deployment with separate
+password-protected accounts inside HomeLab. See the
+[deployment and account guide](web-app/DEPLOYMENT.md) for private HTTPS,
+progress imports, certificate trust, backups, and rollback.
+
+Learn mode divides the deck into fixed groups of 10, with a smaller last group when needed. The entire current group must be mastered before the next one opens. Mastered cards remain in their group for occasional reinforcement; neither previous groups nor future cards enter the current group's questions or answer choices. Each group begins with a first pass through its cards, followed by weighted adaptive practice that favors weaker cards and spaces repetitions.
+
+After all groups finish, **Maîtrise finale** mixes the whole deck. Every card starts with separate, untested final mastery and must earn mastery again. Original history and mastery are preserved. A final-round error lowers only final mastery and never reopens the original group. The set is complete only when every card is mastered in this final phase. The progress bar gives half its space to initial mastery and half to final mastery, so finishing the small groups never displays 100% completion.
+
+**Space** or clicking the card toggles between its term and definition, including after answer feedback. **Left/Right** and the **Précédente/Suivante** buttons navigate cards without recording a grade. Previous cards can be flipped for reference; return to the latest card to answer it. Navigation history stays within the current group and resets when changing groups, phases, or modes.
+
+Cards use active recall: produce the answer mentally or aloud, click the card or press Space to reveal it, then assess your recall with the visible **Incorrect** or **Bon** buttons, or press **1** for Incorrect and **2** for Bon. Grading advances to the next card. Numbered choices are removed from the interface; saved multiple-choice prompts resume as flashcards while preserving progress. Cards always start with the term; flipping reveals the definition. Saved definition-first prompts resume term-first while preserving progress. Optional typed recall uses an input field and Enter to check the answer; matching ignores case and whitespace, and otherwise requires the expected text. Flipping an unanswered typed question switches it to self-assessed recall. After typed answer feedback, press Right to continue. While typing, number keys insert digits, Space inserts a space and Left/Right move the cursor; use the on-screen navigation buttons to change cards. Long text can be scrolled, and the grading and navigation controls remain visible at the minimum window size.
+
+**Réviser** explicitly switches to spaced review of due cards from completed groups; **Apprendre** returns to the current learning phase. Switching modes abandons the unanswered prompt without grading it. Review has its own memory evidence and scheduler and never changes either initial or final completion. Reviews are never injected into Learn mode.
+
+`study_engine.py` separates `RoundManager`, `MemoryModel`, `StudyScheduler`, `QuestionGenerator`, `MasteryEvaluator`, and `StudySession`. Pass a `StudyConfig` to `FlashcardLearnApp` or `StudySession` to configure round size, mastery thresholds, spacing, state weights, error penalty, and available question formats. Round isolation is always enforced. Defaults require at least three consecutive successes, two spaced successes, one spaced active-recall success, and a mastery score of 0.85. The score is a heuristic, not a calibrated probability. An error resets current mastery evidence and reduces the score. Immediate correction repetitions cannot supply spaced or active mastery evidence.
+
+Spacing normally requires three intervening answered questions. For groups of two or three cards it scales to the number of other available cards, keeping small groups finishable. A single-card group instead requires at least five minutes between attempts. The scheduler avoids consecutive repeats whenever alternatives exist, using mastered cards in the same group as reinforcement when needed for spacing.
+
+Progress saves atomically to `flashcard_progress.json`. Version 3 stores the round assignments and statuses, config, current phase, separate initial/final/review histories, pending question, timestamps, question steps, counters, recent sequence, and random generator state. Restarting resumes the pending question and preserves mastery. Saved assignments survive reordering the same deck. Adding, removing, or editing card content requires a fresh learning session because it changes card identities; use **Réinitialiser la progression** to deliberately start over. Exact duplicate cards are rejected.
+
+Version 1 and 2 saves migrate into fixed rounds, preserving counts and available history without inventing new evidence. Old pending questions inside the active group resume as self-assessed recall; questions outside that group are discarded. Old saves do not contain round boundaries, so migration establishes them in the current deck order. The supplied progress file is unchanged by tests and is upgraded when the app next saves.
+
+Run all engine and interface checks with `python3 -m unittest -v`. They cover closed-round isolation, distractors, strict unlocks, spacing, adaptive selection, mastery regression, the global mastery phase, separate reviews, save validation and migration, resumed questions, flipping, navigation, and UI grading controls.
