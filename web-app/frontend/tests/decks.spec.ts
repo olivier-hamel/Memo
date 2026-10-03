@@ -29,7 +29,7 @@ test('create, study, edit and resume an earlier version with its progress', asyn
   await expect(page.locator('.session-summary')).toContainText('1')
   await page.getByRole('button', { name: 'Mes ensembles', exact: true }).click()
   await page.getByRole('button', { name: 'Modifier Mon ensemble navigateur', exact: true }).click()
-  await page.getByLabel('Réponse 1', { exact: true }).fill('Réponse modifiée')
+  await page.getByRole('textbox', { name: 'Réponse 1', exact: true }).fill('Réponse modifiée')
   await page.getByRole('button', { name: 'Enregistrer l’ensemble' }).click()
   await expect(page.locator('.cover-index')).toHaveText('VERSION 2')
   await expect(page.locator('.session-summary > div').first()).toContainText('0')
