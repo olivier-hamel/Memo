@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from .controller import DATA_DIR, LEGACY_PATH, InvalidAction, WebStudy
 from .auth import Accounts, PASSWORDS, SESSION_SECONDS
 from .decks import DEFAULT_SET_ID, DeckError, MongoDecks, validate_cards
+from .quizlet import import_quizlet
 
 COOKIE = "memo_session"
 
@@ -53,6 +54,11 @@ class SetInput(BaseModel):
     description: str = Field(default="", max_length=1000)
     cards: list[CardInput] = Field(min_length=1, max_length=300)
     revision: str | None = Field(default=None, max_length=64)
+
+
+class QuizletInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(min_length=1, max_length=2048)
 
 
 def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, config=None,
@@ -180,6 +186,11 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
         user, repository = library_for(request)
         with app.state.lock:
             return repository.save(user, body.title, body.description, [card.model_dump() for card in body.cards])
+
+    @app.post("/api/sets/import/quizlet")
+    async def quizlet_import(body: QuizletInput, request: Request):
+        library_for(request)
+        return await import_quizlet(body.url)
 
     @app.post("/api/sets/{identifier}")
     def edit_set(identifier: str, body: SetInput, request: Request):

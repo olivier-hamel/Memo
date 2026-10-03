@@ -13,3 +13,5 @@
 **/test-results
 **/playwright-report
 **/*.log
+.local-data
+.gemini-api-key

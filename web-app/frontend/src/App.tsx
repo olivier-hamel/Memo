@@ -128,7 +128,6 @@ export default function App({ deck, onLibrary, onSet }: { deck?: SetSelection; o
   return <div className={`app-shell ${focusMode ? 'is-focused' : ''}`}>
     <aside className="sidebar">
       <a className="brand" href={memoBase} aria-label="Mémo, accueil"><Flower2 size={29} strokeWidth={1.7} /><span>mémo<span className="brand-dot">.</span></span></a>
-      <div className="sidebar-caption">UN PEU CHAQUE JOUR.</div>
       <nav className="main-nav" aria-label="Navigation principale">
         <span className="nav-label">MON ESPACE</span>
         {onLibrary && <button className="nav-item study-library-nav" onClick={onLibrary} disabled={busy}><LibraryBig size={19} /><span>Mes ensembles</span></button>}
@@ -195,6 +194,7 @@ export default function App({ deck, onLibrary, onSet }: { deck?: SetSelection; o
               {study.rounds.map((round, index) => <div className={`journey-step ${round.status.toLowerCase()}`} key={round.id}><div className="journey-marker">{round.status === 'COMPLETED' ? <Check size={14} /> : round.status === 'LOCKED' ? <LockKeyhole size={12} /> : String(index + 1).padStart(2, '0')}</div><div><strong>Groupe {index + 1}</strong><span>{round.status === 'COMPLETED' ? 'Maîtrisé' : round.status === 'ACTIVE' ? `${round.mastered} sur ${round.total} maîtrisées` : `${round.total} cartes`}</span></div>{round.status === 'ACTIVE' && <span className="in-progress-dot" />}</div>)}
               <div className={`journey-step final-step ${study.final_status.toLowerCase()}`}><div className="journey-marker">{study.final_status === 'COMPLETED' ? <Check size={14} /> : <Sparkles size={15} />}</div><div><strong>Maîtrise finale</strong><span>{study.final_status === 'ACTIVE' ? `${study.final_mastered} sur ${study.total} maîtrisées` : study.final_status === 'COMPLETED' ? 'Tout est maîtrisé' : 'L’ensemble mélangé'}</span></div></div>
             </div><div className="journey-note"><LockKeyhole size={13} /><p>Un groupe maîtrisé débloque le suivant. Chaque chose en son temps.</p></div></section>
+            <button type="button" className="secondary-button" onClick={() => setModal('reset')} disabled={busy}>Réinitialiser la progression</button>
           </aside>
         </div>
 

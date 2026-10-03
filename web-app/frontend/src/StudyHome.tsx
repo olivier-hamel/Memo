@@ -40,7 +40,7 @@ function SetLibrary({ library, recent, open, create, study }: {
 
   return <>
     <div className="collection-heading">
-      <div><div className="collection-eyebrow"><span />TA BIBLIOTHÈQUE</div><h1>Mes ensembles<span>.</span></h1><p>Toutes tes idées, au même endroit. Un peu de savoir, chaque jour.</p></div>
+      <div><div className="collection-eyebrow"><span />TA BIBLIOTHÈQUE</div><h1>Mes ensembles<span>.</span></h1></div>
       {library.enabled && <button className="primary-button" onClick={create}><Plus size={18} />Nouvel ensemble</button>}
     </div>
     <div className="collection-summary"><span><Layers3 size={16} /><strong>{library.sets.length}</strong> ensemble{library.sets.length > 1 ? 's' : ''}</span><span className="summary-separator" /><span><BookOpen size={16} /><strong>{cardCount}</strong> carte{cardCount > 1 ? 's' : ''}</span><span className="collection-summary-note"><Sprout size={15} />À ton rythme.</span></div>
@@ -145,9 +145,7 @@ export default function StudyHome() {
   return <div className="collection-shell">
     <aside className="collection-sidebar">
       <button className="collection-brand" onClick={home} aria-label="Mémo, accueil"><Flower2 size={29} strokeWidth={1.7} /><span>mémo<span>.</span></span></button>
-      <span className="collection-sidebar-caption">UN PEU CHAQUE JOUR.</span>
       <nav aria-label="Navigation principale"><span className="collection-nav-label">MON ESPACE</span><button className="collection-nav-item active" onClick={home} aria-current={route.screen === 'library' ? 'page' : undefined}><LibraryBig size={19} /><span>Mes ensembles</span><span className="collection-nav-count">{library.sets.length}</span></button>{library.enabled && <button className="collection-nav-item" onClick={() => navigate({ screen: 'new' })}><Plus size={19} /><span>Créer un ensemble</span></button>}{account && <><button className="collection-nav-item" onClick={account.changePassword}><Settings2 size={19} /><span>Changer mon mot de passe</span></button><button className="collection-nav-item" onClick={account.logout}><LogOut size={19} /><span>Se déconnecter</span></button></>}</nav>
-      <div className="collection-sidebar-note"><span><Sprout size={29} strokeWidth={1.3} /></span><h2>Le savoir<br />se cultive.</h2><p>Une idée, une carte,<br />un petit pas chaque jour.</p><div className="sidebar-note-line" /></div>
       <div className="collection-sidebar-footer"><span className="collection-avatar">{account?.user.display_name.charAt(0).toUpperCase() || 'M'}</span><div><strong>{account?.user.display_name || 'Mon espace'}</strong><span>À mon rythme</span></div><Sprout size={17} /></div>
     </aside>
     <div className="collection-workspace">

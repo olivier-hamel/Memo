@@ -99,8 +99,7 @@ class WebStudy:
                 temporary.unlink(missing_ok=True)
 
     def record(self, correct):
-        old_phase, old_round = self.session.phase, self.session.current_round_index
-        old_size = len(self.session.active_pool)
+        old_phase = self.session.phase
         self.session.grade(correct)
         self.view.answered, self.view.correct, self.view.showing_answer = True, correct, True
         self.notice = ""
@@ -108,8 +107,6 @@ class WebStudy:
             self.notice = ("Tous les groupes sont maîtrisés. Place à la maîtrise finale !"
                            if self.session.phase == Phase.FINAL_MASTERY_ROUND
                            else "Bravo, tu as maîtrisé toutes les cartes une seconde fois !")
-        elif self.session.mode == "LEARN" and old_round != self.session.current_round_index:
-            self.notice = f"Groupe {old_round + 1} terminé : {old_size} cartes maîtrisées. On continue !"
 
     def navigate(self, direction, response=None):
         if self.view is None:

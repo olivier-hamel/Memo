@@ -9,3 +9,6 @@ test-results/
 playwright-report/
 *.log
 *.tsbuildinfo
+.env.memo-local
+.local-data/
+.gemini-api-key

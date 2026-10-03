@@ -69,7 +69,7 @@
 .nav-item > span:first-of-type, .collection-nav-item > span:first-of-type { flex: 1; }
 .nav-item.active, .collection-nav-item.active { background: var(--lime); color: #22352a; font-weight: 600; }
 .nav-item:hover:not(:disabled):not(.active), .collection-nav-item:hover:not(:disabled):not(.active) { background: #243a31; color: #e8eddf; }
-.nav-item:disabled:not(.active) { opacity: .6; }
+.nav-item:disabled { opacity: 1; }
 .sidebar-bottom, .collection-sidebar-footer {
   display: flex;
   align-items: center;

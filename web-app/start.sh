@@ -2,6 +2,13 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
+# Private local settings are opt-in and never included in the Docker image.
+if [[ -f .env.memo-local ]]; then
+  set -a
+  source .env.memo-local
+  set +a
+fi
+
 if ! command -v python3 >/dev/null || ! command -v npm >/dev/null; then
   echo "Installe Python 3.10+ et Node.js 22.12+ (avec npm) pour lancer Mémo."
   exit 1
@@ -10,7 +17,7 @@ fi
 if [[ ! -x .venv/bin/python ]]; then
   python3 -m venv .venv
 fi
-if ! .venv/bin/python -c 'import fastapi, uvicorn, httpx, pwdlib, pymongo' 2>/dev/null; then
+if ! .venv/bin/python -c 'import fastapi, uvicorn, httpx, pwdlib, pymongo, curl_cffi' 2>/dev/null; then
   .venv/bin/python -m pip install -r backend/requirements.lock.txt
 fi
 if [[ ! -d frontend/node_modules ]]; then
