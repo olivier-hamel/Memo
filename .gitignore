@@ -3,6 +3,8 @@ flashcard_progress.json
 **/progress.json
 **/.progress-*
 **/accounts.sqlite3*
+*.sqlite*
+*.db
 **/users/
 **/bootstrap/
 .env*
@@ -16,6 +18,7 @@ flashcard_progress.json
 secrets/
 volumes/
 backups/
+deployment-private/
 .worktrees/
 
 # Dependencies and generated files

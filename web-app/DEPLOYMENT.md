@@ -5,6 +5,20 @@ HomeLab, sert le tableau de bord et transmet `/memo/*` à Mémo en retirant ce
 préfixe. Le frontend Mémo est compilé avec `VITE_MEMO_BASE=/memo/` et Uvicorn
 reçoit `--root-path /memo`. Les API HomeLab `/api/*` conservent leur routage.
 
+## Déployer avec Git
+
+Conserver chaque application dans son propre checkout Git. Préparer les commits,
+vérifier les tests et examiner `git diff --check` avant de transférer les sources.
+Sur le serveur, récupérer la branche validée avec `git fetch`, puis avancer
+uniquement avec `git merge --ff-only` ; ne pas réécrire l'historique ni écraser
+un checkout qui contient des changements locaux. Le `.env` privé et les volumes
+restent en dehors des commits.
+
+Un transfert direct peut utiliser `git bundle create application.bundle <branche>`
+puis `git fetch /chemin/prive/application.bundle <branche>`. Ce transfert conserve
+les commits et permet de déployer avant une publication GitHub. Un push vers
+un dépôt public demande l'accord de son propriétaire.
+
 ## Sources et configuration
 
 Placer les deux dépôts côte à côte : `homelab/` et `memo/`. La variable Compose
