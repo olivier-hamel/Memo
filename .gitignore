@@ -1,0 +1,32 @@
+# Runtime state and private configuration
+flashcard_progress.json
+**/progress.json
+**/.progress-*
+**/accounts.sqlite3*
+**/users/
+**/bootstrap/
+.env*
+!.env.example
+**/.env*
+!**/.env.example
+.ssh/
+*.key
+*.pem
+*.crt
+secrets/
+volumes/
+backups/
+.worktrees/
+
+# Dependencies and generated files
+.venv/
+venv/
+node_modules/
+dist/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+test-results/
+playwright-report/
+*.log
+.DS_Store

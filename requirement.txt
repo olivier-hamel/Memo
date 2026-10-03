@@ -1,0 +1,3 @@
+# No third-party Python packages are required.
+# The app uses Python's standard library, including tkinter.
+# If tkinter is missing on Debian/Ubuntu, install it with: sudo apt install python3-tk
