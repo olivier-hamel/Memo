@@ -7,45 +7,6 @@ retrouve ses propres acquis ; les données et mots de passe restent hors Git.
 La bibliothèque MongoDB ajoute des ensembles privés, un éditeur de questions et
 réponses et des versions indépendantes. Voir [la configuration MongoDB](MONGODB.md).
 
-## Importer un ensemble Quizlet
-
-Dans **Nouvel ensemble → Importer depuis Quizlet**, colle le lien HTTPS d’un
-ensemble public, puis clique sur **Importer les cartes**. Mémo récupère le texte,
-la structure HTML et les données embarquées de la page, puis utilise
-**Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`) pour extraire les termes et
-définitions dans leur langue et leur ordre d’origine. Les champs se remplissent
-automatiquement et restent modifiables avant **Créer l’ensemble**. Les cartes
-déjà saisies sont conservées ; seuls les emplacements entièrement vides sont
-remplacés. Un titre ou une description déjà saisis sont conservés.
-
-La clé Gemini reste sur le backend. Configure `MEMO_GEMINI_API_KEY` ou
-`MEMO_GEMINI_API_KEY_FILE` (chemin vers un fichier secret lisible par le serveur).
-En local, le backend lit aussi `.gemini-api-key` à la racine de `web-app/` ; ce
-fichier est exclu de Git et du contexte Docker. En conteneur, monte le secret en
-lecture seule et définis `MEMO_GEMINI_API_KEY_FILE` sur son chemin dans le
-conteneur. Ne mets jamais la clé dans une variable `VITE_*`.
-
-Le modèle dispose d’un [quota gratuit](https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash-lite),
-avec les limites du projet Google associé à la clé. Utilise un projet sans
-facturation pour rester sur le niveau gratuit. Le contenu public de la page est
-envoyé à Google pour l’extraction. La bibliothèque MongoDB et un compte connecté
-sont nécessaires, comme pour la création manuelle d’un ensemble.
-
-La récupération utilise une connexion HTTPS compatible avec Chrome, afin de
-lire les pages publiques que Quizlet refuse aux clients HTTP standards. Le
-backend valide chaque redirection et conserve la vérification des certificats.
-`MEMO_QUIZLET_BROWSER_HTTP=0` permet de revenir au client HTTP standard pour le
-diagnostic. Gemini lit aussi les cartes stockées dans les données JSON imbriquées
-de Quizlet, même quand seules les premières cartes figurent dans le texte visible.
-
-L’import accepte jusqu’à 300 cartes textuelles. Les pages privées, les
-vérifications anti-robot, les pages dont les cartes nécessitent JavaScript et
-les ensembles incomplets produisent une erreur sans modifier le brouillon.
-Mémo n’exécute pas les scripts Quizlet, n’automatise pas les CAPTCHA et ne se
-connecte pas à un compte Quizlet.
-Les erreurs de quota, de connexion et de configuration sont affichées dans
-l’éditeur ; aucun ensemble n’est enregistré avant ta validation.
-
 Version web de l’application Tkinter, avec une nouvelle interface française en React/TypeScript. Le backend FastAPI utilise une **copie exacte du `study_engine.py` original**. Les 39 termes et définitions sont extraits de `FLASHCARDS` sans modifier leur contenu.
 
 ## Lancer l’application
