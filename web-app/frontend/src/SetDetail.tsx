@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, TextareaHTMLAttributes } from 'react'
-import { ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, Cloud, Layers3, LockKeyhole, Pencil, Plus, Save, Search, Trash2, Undo2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, Cloud, Download, Layers3, Link, LoaderCircle, LockKeyhole, Pencil, Plus, Save, Search, Trash2, Undo2, X } from 'lucide-react'
 import type { CardInput, CardSetDetail } from './types'
 import { LibraryError, readLibrary } from './libraryApi'
 
@@ -39,7 +39,12 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
   const [description, setDescription] = useState(original?.description || '')
   const [cards, setCards] = useState<DraftCard[]>(() => (original?.cards || [{ term: '', definition: '' }]).map(draftCard))
   const [saving, setBusy] = useState(false)
-  const busy = saving
+  const [importing, setImporting] = useState(false)
+  const busy = saving || importing
+  const [importOpen, setImportOpen] = useState(false)
+  const [quizletUrl, setQuizletUrl] = useState('')
+  const [importError, setImportError] = useState('')
+  const [importNotice, setImportNotice] = useState('')
   const pending = useRef(false)
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState(false)
@@ -55,13 +60,13 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
   const query = search.trim().toLocaleLowerCase('fr')
   const visible = cards.map((card, index) => ({ card, index })).filter(({ card }) => `${card.term} ${card.definition}`.toLocaleLowerCase('fr').includes(query))
 
-  useEffect(() => { onDirty(dirty) }, [dirty, onDirty])
+  useEffect(() => { onDirty(dirty || importing) }, [dirty, importing, onDirty])
   useEffect(() => {
-    if (!dirty) return
+    if (!dirty && !importing) return
     const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
     window.addEventListener('beforeunload', prevent)
     return () => window.removeEventListener('beforeunload', prevent)
-  }, [dirty])
+  }, [dirty, importing])
   useLayoutEffect(() => {
     if (newCardKey) form.current?.querySelector<HTMLTextAreaElement>(`[data-card-key="${newCardKey}"] textarea`)?.focus()
   }, [newCardKey])
@@ -106,6 +111,30 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
     const card = draftCard()
     setCards(current => [...current, card]); setSearch(''); setNewCardKey(card.key); setSavedNotice(false)
   }
+  const importCards = async () => {
+    if (pending.current || !editable || original) return
+    if (!quizletUrl.trim()) { setImportError('Colle le lien d’un ensemble public Quizlet.'); return }
+    pending.current = true
+    setImporting(true); setImportError(''); setImportNotice(''); setError('')
+    try {
+      const imported = await readLibrary<{ title: string; description: string; cards: CardInput[] }>('sets/import/quizlet', { url: quizletUrl.trim() })
+      // Preserve even partially filled draft cards; only discard empty placeholders.
+      const existing = cards.filter(card => card.term.trim() || card.definition.trim())
+      const combined = [...existing, ...imported.cards.map(draftCard)]
+      if (combined.length > 300) throw new Error('L’import dépasserait la limite de 300 cartes. Réduis ton brouillon ou choisis un ensemble plus petit.')
+      if (new Set(combined.map(card => JSON.stringify({ term: card.term, definition: card.definition }))).size !== combined.length) {
+        throw new Error('L’import contient des cartes déjà présentes dans ton brouillon. Retire ces doublons avant de réessayer.')
+      }
+      setCards(combined)
+      if (!title.trim()) setTitle(imported.title)
+      if (!description.trim()) setDescription(imported.description)
+      setRemoved(null); setSearch(''); setSavedNotice(false)
+      setImportNotice(`${imported.cards.length} carte${imported.cards.length > 1 ? 's importées' : ' importée'}. Vérifie les textes, puis crée ton ensemble.`)
+      setImportOpen(false)
+    } catch (caught) {
+      setImportError((caught as Error).message)
+    } finally { pending.current = false; setImporting(false) }
+  }
   const addOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>, card: DraftCard) => {
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || !card.term.trim() || !card.definition.trim()) return
     event.preventDefault()
@@ -134,6 +163,20 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
     {!latest && <div className="detail-notice"><Layers3 size={17} /><span>Tu consultes une version précédente. Sa progression est conservée.</span><button type="button" onClick={() => onVersion(original!.latest_version)}>Voir la version actuelle<ArrowRight size={14} /></button></div>}
     {error && <div className="detail-error" role="alert"><span>{error}</span>{conflict && <button type="button" onClick={() => onVersion(original!.version)}>Recharger l’ensemble</button>}</div>}
 
+    {editable && !original && <section className="quizlet-import" aria-label="Import Quizlet" aria-busy={importing}>
+      <button className="quizlet-import-toggle" type="button" disabled={busy} aria-expanded={importOpen} aria-controls="quizlet-import-panel" onClick={() => { setImportOpen(!importOpen); setImportError('') }}><Download size={17} /><span>Importer depuis Quizlet</span><Plus size={16} className={importOpen ? 'is-open' : ''} /></button>
+      {importOpen && <div id="quizlet-import-panel" className="quizlet-import-panel">
+        <p>Colle un lien public pour remplir tes cartes. Les cartes déjà saisies seront conservées.</p>
+        <label htmlFor="quizlet-url">Lien public Quizlet</label>
+        <div className="quizlet-import-fields"><div className="quizlet-url-field"><Link size={16} /><input id="quizlet-url" inputMode="url" autoComplete="off" placeholder="https://quizlet.com/123456/mon-ensemble-flash-cards/" maxLength={2048} value={quizletUrl} disabled={busy} aria-describedby="quizlet-import-help" onChange={event => { setQuizletUrl(event.target.value); setImportError('') }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void importCards() } }} /></div>
+          <button className="secondary-button" type="button" disabled={busy || !quizletUrl.trim()} onClick={() => void importCards()}>{importing ? <LoaderCircle size={16} className="import-spinner" /> : <Download size={16} />}{importing ? 'Import en cours…' : 'Importer les cartes'}</button>
+        </div>
+        {importing && <p role="status">Lecture de la page et extraction des cartes… Cela peut prendre une minute.</p>}
+        {importError && <div className="detail-error" role="alert">{importError}</div>}
+      </div>}
+      {importNotice && <p className="quizlet-import-notice" role="status"><CheckCircle2 size={17} />{importNotice}</p>}
+    </section>}
+
     <section className="card-list-section" aria-labelledby="card-list-heading">
       <div className="card-list-toolbar">
         <div className="card-list-heading"><h2 id="card-list-heading">Les cartes</h2><span>{query ? `${visible.length} / ${cards.length}` : cards.length}</span></div>
@@ -161,7 +204,7 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
       {editable && <button className="add-card-row" type="button" disabled={busy || cards.length >= 300} onClick={add}><span><Plus size={21} /></span>Ajouter une carte<small>{cards.length >= 300 ? 'Limite de 300 cartes atteinte' : `${cards.length} / 300`}</small></button>}
     </section>
     {editable && <div className="detail-savebar">
-      <div className={`detail-save-status ${dirty ? 'has-changes' : ''}`} role="status" aria-live="polite">{busy ? <Cloud size={17} /> : dirty || !original ? <span className="unsaved-dot" /> : <CheckCircle2 size={17} />}<span>{saving ? 'Enregistrement de ton ensemble…' : dirty ? 'Modifications non enregistrées' : savedNotice ? 'Toutes les modifications sont enregistrées' : original ? 'Toutes les modifications sont enregistrées' : 'Ton ensemble est prêt à prendre forme'}</span></div>
+      <div className={`detail-save-status ${dirty ? 'has-changes' : ''}`} role="status" aria-live="polite">{busy ? <Cloud size={17} /> : dirty || !original ? <span className="unsaved-dot" /> : <CheckCircle2 size={17} />}<span>{importing ? 'Import des cartes Quizlet…' : saving ? 'Enregistrement de ton ensemble…' : dirty ? 'Modifications non enregistrées' : savedNotice ? 'Toutes les modifications sont enregistrées' : original ? 'Toutes les modifications sont enregistrées' : 'Ton ensemble est prêt à prendre forme'}</span></div>
       <button className="primary-button" type="submit" disabled={busy || (!!original && !dirty)}>{saving ? 'Enregistrement…' : original ? 'Enregistrer les modifications' : 'Créer l’ensemble'}<Check size={17} /></button>
     </div>}
     {removed && <div className="undo-toast" role="status"><Trash2 size={16} /><span>Carte supprimée</span><button type="button" disabled={busy || cards.length >= 300} onClick={() => {

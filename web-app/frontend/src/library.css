@@ -115,6 +115,30 @@
 .detail-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; line-height: 1.7; background: #faeee6; border: 1px solid #ebd7c9; border-radius: 9px; padding: 14px 17px; color: #955f45; margin-bottom: 22px; }
 .detail-error button { border: 0; background: transparent; color: #89553e; text-decoration: underline; font-size: 11px; flex-shrink: 0; }
 .card-list-section { margin-top: 38px; }
+.quizlet-import { border: 1px solid #dbe4d0; border-radius: 10px; background: #eef3e7; margin: 25px 0; overflow: hidden; }
+.quizlet-import-toggle { display: flex; align-items: center; gap: 10px; width: 100%; padding: 17px 19px; border: 0; background: transparent; color: #48683d; text-align: left; font-size: 12px; font-weight: 600; }
+.quizlet-import-toggle > span { flex: 1; }
+.quizlet-import-toggle .is-open { transform: rotate(45deg); }
+.quizlet-import-panel { border-top: 1px solid #dbe4d0; padding: 19px; }
+.quizlet-import-panel p { font-size: 12px; line-height: 1.8; color: #687c59; margin-bottom: 15px; }
+.quizlet-import-panel > label { display: block; font-size: 11px; color: #48683d; margin-bottom: 8px; }
+.quizlet-import-fields { display: flex; align-items: center; gap: 10px; }
+.quizlet-url-field { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; padding: 0 12px; border: 1px solid #cfdac3; border-radius: 7px; background: #fffefa; color: #849474; }
+.quizlet-url-field:focus-within { border-color: #90a37d; box-shadow: 0 0 0 3px #849b6720; }
+.quizlet-url-field svg { flex-shrink: 0; }
+.quizlet-url-field input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #354932; font-size: 12px; padding: 13px 0; }
+.quizlet-import-fields .secondary-button { display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 11px; min-height: 43px; flex-shrink: 0; }
+.quizlet-import-panel small { display: block; color: #7a896f; font-size: 10px; line-height: 1.8; margin: 11px 0; }
+.quizlet-import-panel .detail-error { margin: 14px 0 0; }
+.quizlet-import-notice { display: flex; gap: 9px; align-items: center; color: #48683d; font-size: 12px; line-height: 1.8; padding: 0 19px 17px; }
+.quizlet-import-notice svg { flex-shrink: 0; }
+.import-spinner { animation: import-spin 1s linear infinite; }
+@keyframes import-spin { to { transform: rotate(360deg); } }
+@media (max-width: 600px) {
+  .quizlet-import-fields { flex-direction: column; align-items: stretch; }
+  .quizlet-import-panel, .quizlet-import-toggle { padding: 15px; }
+}
+@media (prefers-reduced-motion: reduce) { .import-spinner { animation: none; } }
 .card-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-bottom: 23px; }
 .card-list-heading { display: flex; gap: 9px; align-items: center; }
 .card-list-heading h2 { font-size: 16px; font-weight: 600; }
