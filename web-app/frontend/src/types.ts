@@ -1,6 +1,13 @@
 export type CardState = 'NEW' | 'UNTESTED' | 'LEARNING' | 'FAMILIAR' | 'MASTERED'
 export type RoundStatus = 'LOCKED' | 'ACTIVE' | 'COMPLETED'
 export type Mode = 'LEARN' | 'REVIEW'
+export type CardInput = { term: string; definition: string }
+export type CardSet = {
+  id: string; title: string; description: string; editable: boolean; shared: boolean
+  revision: string; latest_version: number; versions: { version: number; card_count: number }[]
+}
+export type CardSetDetail = CardSet & { version: number; cards: CardInput[] }
+export type SetSelection = { id: string; version: number; title: string }
 export interface StudyState {
   revision: string
   mode: Mode

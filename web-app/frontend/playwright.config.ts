@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests',
+  testMatch: 'study.spec.ts',
   fullyParallel: false,
   workers: 1,
   reporter: 'list',

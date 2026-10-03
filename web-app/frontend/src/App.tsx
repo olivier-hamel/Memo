@@ -5,7 +5,7 @@ import {
   CircleHelp, Cloud, Flame, Flower2, Focus, Keyboard, Layers3, Leaf,
   LockKeyhole, RotateCcw, Settings2, Sparkles, Sprout, Trophy, X,
 } from 'lucide-react'
-import type { Action, CardState, StudyState } from './types'
+import type { Action, CardState, SetSelection, StudyState } from './types'
 import { apiFetch, memoBase } from './api'
 import { useAccount } from './AuthGate'
 
@@ -38,7 +38,7 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
   </dialog>
 }
 
-export default function App() {
+export default function App({ deck, onLibrary }: { deck?: SetSelection; onLibrary?: () => void }) {
   const account = useAccount()
   const [study, setStudy] = useState<StudyState | null>(null)
   const [busy, setBusy] = useState(false)
@@ -52,6 +52,8 @@ export default function App() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const cardTextRef = useRef<HTMLDivElement>(null)
   const closeModal = useCallback(() => setModal(null), [])
+  const studyQuery = deck ? `?set_id=${encodeURIComponent(deck.id)}&version=${deck.version}` : ''
+  const deckTitle = deck?.title || 'Éthique de l’ingénieur'
   stateRef.current = study
 
   const receive = useCallback((data: StudyState) => {
@@ -62,14 +64,14 @@ export default function App() {
 
   const load = useCallback(async () => {
     try {
-      const response = await apiFetch('state', { cache: 'no-store' })
+      const response = await apiFetch('state' + studyQuery, { cache: 'no-store' })
       if (!response.ok) throw new Error()
       receive(await response.json())
       setError('')
     } catch {
       setError('Impossible de joindre le serveur. Vérifie que le backend est lancé, puis réessaie.')
     }
-  }, [receive])
+  }, [receive, studyQuery])
 
   useEffect(() => { void load() }, [load])
 
@@ -79,7 +81,7 @@ export default function App() {
     setBusy(true)
     setError('')
     try {
-      const response = await apiFetch('actions', {
+      const response = await apiFetch('actions' + studyQuery, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...action, revision: stateRef.current.revision }),
       })
@@ -96,14 +98,14 @@ export default function App() {
       setError(caught instanceof Error ? caught.message : 'La connexion a été interrompue. Actualise la session avant de continuer.')
       // Recover the authoritative state if the server saved before the connection broke.
       if (caught instanceof TypeError) {
-        const result = await apiFetch('state', { cache: 'no-store' }).catch(() => null)
+        const result = await apiFetch('state' + studyQuery, { cache: 'no-store' }).catch(() => null)
         if (result?.ok) receive(await result.json())
       }
     } finally {
       requestPending.current = false
       setBusy(false)
     }
-  }, [load, receive])
+  }, [load, receive, studyQuery])
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -137,6 +139,7 @@ export default function App() {
   if (!study) return <div className="boot-screen">
     <div className="brand-mark"><Flower2 size={30} /></div><h1>mémo<span>.</span></h1>
     {error ? <><p role="alert">{error}</p><button className="primary-button" onClick={() => void load()}><RotateCcw size={17} /> Réessayer</button></> : <p className="loading-text">Ton espace d’étude se prépare…</p>}
+    {onLibrary && <button className="secondary-button" onClick={onLibrary}>Mes ensembles</button>}
   </div>
 
   const q = study.question
@@ -160,8 +163,8 @@ export default function App() {
       </nav>
       <div className="sidebar-deck">
         <span className="nav-label">TON ENSEMBLE</span>
-        <div className="deck-cover"><div className="cover-lines" /><Sprout size={57} strokeWidth={1.2} /><span>LE SAVOIR<br />SE CULTIVE.</span><span className="cover-index">01 / ÉTHIQUE</span></div>
-        <h3>Éthique de l’ingénieur</h3><p>{study.total} cartes pour y voir plus clair.</p>
+        <div className="deck-cover"><div className="cover-lines" /><Sprout size={57} strokeWidth={1.2} /><span>LE SAVOIR<br />SE CULTIVE.</span><span className="cover-index">{deck ? `VERSION ${deck.version}` : '01 / ÉTHIQUE'}</span></div>
+        <h3>{deckTitle}</h3><p>{study.total} cartes pour y voir plus clair.</p>
       </div>
       <div className="sidebar-bottom"><div className="user-avatar">{account?.user.display_name.charAt(0) || 'M'}</div><div><strong>{account?.user.display_name || 'Mon espace personnel'}</strong><span>À mon rythme</span></div><Leaf size={17} /></div>
     </aside>
@@ -169,7 +172,7 @@ export default function App() {
     <div className="workspace">
       <header className="topbar">
         <div className="breadcrumb"><span>Mon espace</span><ChevronRight size={13} /><strong>{isReview ? 'Révisions' : 'Apprendre'}</strong></div>
-        <div className="topbar-actions"><span className={`save-status ${busy ? 'saving' : ''}`}><Cloud size={15} />{busy ? 'Enregistrement…' : 'Progression sauvegardée'}</span><button className="icon-button" title="Paramètres" aria-label="Paramètres" onClick={() => setModal('settings')}><Settings2 size={19} /></button></div>
+        <div className={`topbar-actions ${onLibrary ? 'has-library' : ''}`}><span className={`save-status ${busy ? 'saving' : ''}`}><Cloud size={15} />{busy ? 'Enregistrement…' : 'Progression sauvegardée'}</span>{onLibrary && <button className="secondary-button library-open" onClick={onLibrary} disabled={busy} aria-label="Mes ensembles"><Layers3 size={16} /><span>Mes ensembles</span></button>}<button className="icon-button" title="Paramètres" aria-label="Paramètres" onClick={() => setModal('settings')}><Settings2 size={19} /></button></div>
       </header>
 
       <main>
@@ -181,7 +184,7 @@ export default function App() {
 
         <div className="study-layout">
           <section className="study-column" aria-label="Session d’étude">
-            <div className="session-heading"><div className="session-icon"><Layers3 size={20} /></div><div><h2>{groupTitle}<span className="session-divider">/</span><span className="deck-title-inline">Éthique de l’ingénieur</span></h2><p>{groupCaption}</p></div><button className={`icon-button focus-button ${focusMode ? 'selected' : ''}`} title={focusMode ? 'Quitter le mode concentration' : 'Mode concentration'} aria-label={focusMode ? 'Quitter le mode concentration' : 'Mode concentration'} aria-pressed={focusMode} onClick={() => setFocusMode(!focusMode)}><Focus size={19} /></button></div>
+            <div className="session-heading"><div className="session-icon"><Layers3 size={20} /></div><div><h2>{groupTitle}<span className="session-divider">/</span><span className="deck-title-inline">{deckTitle}</span></h2><p>{groupCaption}</p></div><button className={`icon-button focus-button ${focusMode ? 'selected' : ''}`} title={focusMode ? 'Quitter le mode concentration' : 'Mode concentration'} aria-label={focusMode ? 'Quitter le mode concentration' : 'Mode concentration'} aria-pressed={focusMode} onClick={() => setFocusMode(!focusMode)}><Focus size={19} /></button></div>
 
             <div className="session-progress"><div className="thin-track"><div style={{ width: `${isReview ? 0 : study.active_total ? study.active_mastered / study.active_total * 100 : 100}%` }} /></div><span>{isReview ? 'Rappel espacé' : `${study.active_mastered} / ${study.active_total || study.total} maîtrisées`}</span></div>
 

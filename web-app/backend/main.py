@@ -5,13 +5,14 @@ from pathlib import Path
 from threading import RLock
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from .controller import DATA_DIR, LEGACY_PATH, InvalidAction, WebStudy
 from .auth import Accounts, PASSWORDS, SESSION_SECONDS
+from .decks import DEFAULT_SET_ID, DeckError, MongoDecks, validate_cards
 
 COOKIE = "memo_session"
 
@@ -39,8 +40,22 @@ class Action(BaseModel):
     typed: StrictBool | None = None
 
 
+class CardInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    term: str = Field(min_length=1, max_length=2000)
+    definition: str = Field(min_length=1, max_length=12000)
+
+
+class SetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    cards: list[CardInput] = Field(min_length=1, max_length=300)
+    revision: str | None = Field(default=None, max_length=64)
+
+
 def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, config=None,
-               auth_enabled=None, data_dir=None, require_https=None, clock=None):
+               auth_enabled=None, data_dir=None, require_https=None, clock=None, deck_repository=None):
     auth_enabled = auth_enabled if auth_enabled is not None else os.environ.get("FLASHCARD_WEB_AUTH", "0") == "1"
     require_https = require_https if require_https is not None else os.environ.get("FLASHCARD_WEB_REQUIRE_HTTPS", "1") != "0"
     directory = Path(data_dir or os.environ.get("FLASHCARD_WEB_DATA", str(DATA_DIR)))
@@ -52,13 +67,18 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
     async def lifespan(app):
         app.state.lock = RLock()
         app.state.studies = {}
+        app.state.decks = deck_repository if deck_repository is not None else MongoDecks.from_env()
         if auth_enabled:
             app.state.accounts = Accounts(directory, **({"clock": clock} if clock else {}))
         else:
             path = progress_path or os.environ.get("FLASHCARD_WEB_PROGRESS", str(DATA_DIR / "progress.json"))
             source = legacy_path if os.environ.get("FLASHCARD_WEB_IMPORT_DESKTOP", "1") != "0" else None
             app.state.study = WebStudy(path, source, raw_cards, config)
-        yield
+        try:
+            yield
+        finally:
+            if deck_repository is None and app.state.decks is not None:
+                app.state.decks.close()
 
     app = FastAPI(title="Mémo · Flashcard Learn", version="1.0.0", lifespan=lifespan)
 
@@ -74,6 +94,12 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
                     if (origin != expected or request.headers.get("x-memo-request") != "1"
                             or request.headers.get("content-type", "").split(";")[0] != "application/json"):
                         return JSONResponse({"detail": "Requête refusée."}, status_code=403)
+            if request.url.path.removeprefix(request.scope.get("root_path", "")).startswith("/api/sets") and request.method == "POST":
+                length = request.headers.get("content-length", "0")
+                if not length.isdigit() or int(length) > 2 * 1024 * 1024:
+                    return JSONResponse({"detail": "Cet ensemble est trop volumineux."}, status_code=413)
+                if len(await request.body()) > 2 * 1024 * 1024:
+                    return JSONResponse({"detail": "Cet ensemble est trop volumineux."}, status_code=413)
             response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
             return response
@@ -87,18 +113,61 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
             raise HTTPException(403, "Change ton mot de passe pour commencer.")
         return user
 
-    def study_for(request):
+    @app.exception_handler(DeckError)
+    async def deck_error(request, error):
+        return JSONResponse({"detail": str(error)}, status_code=error.status)
+
+    def library_for(request):
+        if not auth_enabled or app.state.decks is None:
+            raise HTTPException(403, "La bibliothèque MongoDB n’est pas activée.")
+        return current_user(request), app.state.decks
+
+    def study_for(request, set_id=None, version=None):
         if not auth_enabled:
             return app.state.study, app.state.lock
         user = current_user(request)
+        cards = raw_cards
+        path = app.state.accounts.progress_path(user["id"])
+        key = user["id"]
+        if app.state.decks is not None:
+            deck = app.state.decks.get(user, set_id or DEFAULT_SET_ID, version if set_id else 1)
+            cards = validate_cards(deck["cards"])
+            key = (user["id"], deck["id"], deck["version"])
+            if not (deck["id"] == DEFAULT_SET_ID and deck["version"] == 1):
+                path = path.parent / "sets" / deck["id"] / f'v{deck["version"]}.json'
+        elif set_id is not None:
+            raise HTTPException(403, "La bibliothèque MongoDB n’est pas activée.")
         with app.state.lock:
-            if user["id"] not in app.state.studies:
+            if key not in app.state.studies:
                 try:
-                    study = WebStudy(app.state.accounts.progress_path(user["id"]), None, raw_cards, config)
+                    study = WebStudy(path, None, cards, config)
                 except (ValueError, OSError) as error:
                     raise HTTPException(503, "Ta progression ne peut pas être chargée. Contacte l’administrateur.") from error
-                app.state.studies[user["id"]] = study, RLock()
-            return app.state.studies[user["id"]]
+                app.state.studies[key] = study, RLock()
+            return app.state.studies[key]
+
+    @app.get("/api/sets")
+    def sets(request: Request):
+        if app.state.decks is None or not auth_enabled:
+            return {"enabled": False, "sets": []}
+        user, repository = library_for(request)
+        return {"enabled": True, "default_set_id": DEFAULT_SET_ID, "sets": repository.list(user)}
+
+    @app.get("/api/sets/{identifier}")
+    def get_set(identifier: str, request: Request, version: int | None = Query(default=None, ge=1)):
+        user, repository = library_for(request)
+        return repository.get(user, identifier, version)
+
+    @app.post("/api/sets", status_code=201)
+    def create_set(body: SetInput, request: Request):
+        user, repository = library_for(request)
+        with app.state.lock:
+            return repository.save(user, body.title, body.description, [card.model_dump() for card in body.cards])
+
+    @app.post("/api/sets/{identifier}")
+    def edit_set(identifier: str, body: SetInput, request: Request):
+        user, repository = library_for(request)
+        return repository.save(user, body.title, body.description, [card.model_dump() for card in body.cards], identifier, body.revision)
 
     def set_cookie(response, token):
         response.set_cookie(COOKIE, token, max_age=SESSION_SECONDS, httponly=True,
@@ -150,16 +219,16 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
         return {"status": "ok"}
 
     @app.get("/api/state")
-    def state(request: Request, response: Response):
+    def state(request: Request, response: Response, set_id: str | None = None, version: int | None = Query(default=None, ge=1)):
         response.headers["Cache-Control"] = "no-store"
-        study, lock = study_for(request)
+        study, lock = study_for(request, set_id, version)
         with lock:
             return study.snapshot()
 
     @app.post("/api/actions")
-    def act(action: Action, request: Request, response: Response):
+    def act(action: Action, request: Request, response: Response, set_id: str | None = None, version: int | None = Query(default=None, ge=1)):
         response.headers["Cache-Control"] = "no-store"
-        study, lock = study_for(request)
+        study, lock = study_for(request, set_id, version)
         with lock:
             if action.revision != study.revision:
                 raise HTTPException(409, "La session a changé dans un autre onglet. La vue a été actualisée ; recommence ton action.")

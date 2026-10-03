@@ -269,6 +269,55 @@ main { max-width: 1400px; padding: 39px 46px 0; margin: auto; }
 .auth-secondary { border: none; background: transparent; color: var(--green); padding: 8px; font-size: 12px; display: flex; gap: 8px; align-items: center; justify-content: center; }
 .auth-panel .auth-footnote { margin-top: 24px; font-size: 11px; }
 .account-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+.library-open { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.library-shell { min-height: 100svh; }
+.library-topbar { display: flex; align-items: center; gap: 18px; padding: 22px 30px; border-bottom: 1px solid var(--line); background: #fffefa; }
+.library-brand { display: flex; align-items: center; gap: 8px; font-family: var(--serif); font-size: 29px; }
+.library-topbar > span:nth-child(2) { margin-left: auto; font-size: 12px; color: #77816f; }
+.library-topbar button { display: flex; align-items: center; gap: 7px; }
+.library-main { max-width: 1120px; margin: 0 auto; padding: 42px 30px 60px; }
+.library-heading { display: flex; align-items: center; justify-content: space-between; gap: 22px; }
+.library-heading h1 { font-family: var(--serif); font-weight: 400; font-size: 36px; letter-spacing: -1px; margin-top: 12px; }
+.library-heading .primary-button { width: auto; margin: 0; flex-shrink: 0; }
+.library-intro { font-size: 12px; line-height: 1.8; color: #77816f; max-width: 700px; margin: 20px 0 30px; }
+.set-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 22px; }
+.set-tile { min-width: 0; border: 1px solid var(--line); border-radius: 14px; padding: 24px; background: #fffefa; }
+.set-tile-top { display: flex; align-items: center; gap: 10px; color: #7c8f64; font-size: 10px; }
+.set-tile h2 { font-family: var(--serif); font-weight: 400; font-size: 24px; line-height: 1.4; margin: 20px 0 12px; overflow-wrap: anywhere; }
+.set-tile p { font-size: 12px; line-height: 1.7; color: #77816f; white-space: pre-wrap; overflow-wrap: anywhere; }
+.set-versions { font-size: 11px; color: #819172; margin-top: 22px; }
+.set-tile-actions { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+.set-tile-actions button { display: flex; align-items: center; gap: 7px; }
+.set-tile-actions .primary-button { width: auto; margin: 0; flex: 1; }
+.older-version { display: grid; gap: 9px; font-size: 11px; margin-top: 22px; color: #77816f; }
+.older-version select { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font: inherit; color: var(--ink); }
+.library-empty { text-align: center; padding: 40px; color: #819172; font-size: 13px; }
+.library-empty p { margin-top: 15px; }
+.set-editor { max-width: 860px; margin: 0 auto; }
+.set-editor fieldset { border: 0; padding: 0; min-width: 0; }
+.set-editor label { display: grid; gap: 9px; font-size: 12px; margin: 18px 0; }
+.set-editor label > span { color: #819172; }
+.set-editor input, .set-editor textarea { width: 100%; padding: 12px; font: inherit; line-height: 1.6; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; background: #fffefa; resize: vertical; }
+.set-editor input:focus-visible, .set-editor textarea:focus-visible { outline: 3px solid #a7b87a; outline-offset: 2px; }
+.editor-cards { display: grid; gap: 18px; margin-top: 28px; }
+.editor-card { padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: #fffefa; }
+.editor-card-heading { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #7c8f64; }
+.add-card { display: flex; align-items: center; gap: 7px; margin-top: 20px; }
+.editor-footer { display: flex; align-items: center; gap: 20px; justify-content: space-between; margin-top: 30px; font-size: 12px; color: #77816f; }
+.editor-footer .primary-button { width: auto; margin: 0; }
+@media (max-width: 700px) {
+  .has-library .save-status { display: none; }
+  .library-open { padding: 8px; }
+  .library-open > span { display: none; }
+  .library-topbar { padding: 15px 18px; gap: 12px; flex-wrap: wrap; }
+  .library-topbar > button { margin-left: auto; }
+  .library-main { padding: 28px 18px 45px; }
+  .library-heading { align-items: flex-start; flex-direction: column; gap: 18px; }
+  .library-heading h1 { font-size: 28px; }
+  .set-tile { padding: 20px; }
+  .editor-card { padding: 15px; }
+  .editor-footer { align-items: stretch; flex-direction: column; gap: 12px; }
+}
 .is-focused .sidebar, .is-focused .insights-column { display: none; }
 .is-focused .workspace { margin-left: 0; width: 100%; }
 .is-focused main { max-width: 890px; }

@@ -10,7 +10,7 @@ fi
 if [[ ! -x .venv/bin/python ]]; then
   python3 -m venv .venv
 fi
-if ! .venv/bin/python -c 'import fastapi, uvicorn, httpx, pwdlib' 2>/dev/null; then
+if ! .venv/bin/python -c 'import fastapi, uvicorn, httpx, pwdlib, pymongo' 2>/dev/null; then
   .venv/bin/python -m pip install -r backend/requirements.lock.txt
 fi
 if [[ ! -d frontend/node_modules ]]; then

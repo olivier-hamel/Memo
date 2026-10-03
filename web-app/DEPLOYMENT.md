@@ -100,6 +100,10 @@ modifiés par cette intégration.
 
 ## Comptes et progression
 
+Pour la bibliothèque MongoDB et la création/édition d'ensembles dans Mémo,
+consulter [le guide MongoDB](MONGODB.md). La configuration et la migration sont
+explicites ; les acquis de l'ensemble partagé d'origine restent compatibles.
+
 Les commandes suivantes se lancent depuis HomeLab. Sans `--generate-password`,
 les commandes demandent le mot de passe deux fois, sans l'afficher :
 

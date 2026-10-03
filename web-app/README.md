@@ -4,6 +4,9 @@ Pour l'intégration HomeLab avec comptes individuels, HTTPS privé et stockage
 persistant, consulter [le guide de déploiement](DEPLOYMENT.md). Chaque utilisateur
 retrouve ses propres acquis ; les données et mots de passe restent hors Git.
 
+La bibliothèque MongoDB ajoute des ensembles privés, un éditeur de questions et
+réponses et des versions indépendantes. Voir [la configuration MongoDB](MONGODB.md).
+
 Version web de l’application Tkinter, avec une nouvelle interface française en React/TypeScript. Le backend FastAPI utilise une **copie exacte du `study_engine.py` original**. Les 39 termes et définitions sont extraits de `FLASHCARDS` sans modifier leur contenu.
 
 ## Lancer l’application
@@ -16,7 +19,7 @@ Depuis ce dossier :
 ./start.sh
 ```
 
-Le script installe les dépendances au premier lancement, compile le frontend et démarre l’application sur **http://localhost:8000**. Les polices, icônes et fichiers de l’interface sont servis localement. Après l’installation, aucune connexion à un service externe n’est nécessaire. `Ctrl+C` arrête le serveur.
+Le script installe les dépendances au premier lancement, compile le frontend et démarre l’application sur **http://localhost:8000**. Les polices, icônes et fichiers de l’interface sont servis localement. Le mode personnel utilise les cartes locales ; la bibliothèque connectée nécessite MongoDB. `Ctrl+C` arrête le serveur.
 
 Pour développer avec rechargement automatique de React et de Python :
 

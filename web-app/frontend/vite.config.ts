@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       strictPort: true,
-      proxy: { '/api': env.MEMO_DEV_API || 'http://127.0.0.1:8000' },
+      proxy: { '/api': { target: env.MEMO_DEV_API || 'http://127.0.0.1:8000', changeOrigin: false } },
     },
   }
 })
