@@ -19,7 +19,7 @@ export default function Dialog({ title, children, onClose }: { title: string; ch
       if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) close.current()
     }
   }}>
-    <div className="modal-heading"><h2>{title}</h2><button className="icon-button" aria-label="Fermer" onClick={onClose}><X size={20} /></button></div>
+    <div className="modal-heading"><h2>{title}</h2><button className="icon-button" type="button" aria-label="Fermer" onClick={onClose}><X size={20} /></button></div>
     {children}
   </dialog>
 }

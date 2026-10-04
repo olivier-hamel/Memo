@@ -107,7 +107,7 @@
 .set-detail-meta { display: flex; align-items: center; gap: 11px; font-size: 10px; color: #8a957d; margin-top: 15px; flex-wrap: wrap; }
 .set-detail-meta > span:last-child { display: flex; align-items: center; gap: 6px; }
 .meta-dot { width: 3px; height: 3px; background: #b1bca4; border-radius: 50%; }
-.detail-heading-actions { display: flex; gap: 10px; align-items: center; padding-top: 33px; flex-shrink: 0; }
+.detail-heading-actions { display: flex; gap: 10px; align-items: center; padding-top: 33px; flex-shrink: 0; max-width: 100%; min-width: 0; flex-wrap: wrap; }
 .detail-heading-actions .primary-button { width: auto; min-height: 43px; font-size: 11px; padding: 11px 15px; }
 .detail-heading-actions .secondary-button { display: flex; align-items: center; gap: 7px; min-height: 43px; font-size: 11px; padding: 11px 13px; background: #fffefa; }
 .detail-notice { display: flex; align-items: center; gap: 9px; font-size: 11px; line-height: 1.8; padding: 14px 17px; border-radius: 8px; background: #eef2e7; color: #748765; margin-bottom: 25px; }
@@ -182,6 +182,27 @@
 .detail-save-status.has-changes { color: #9b8758; }
 .unsaved-dot { width: 6px; height: 6px; background: #b49b59; border-radius: 50%; flex-shrink: 0; }
 .detail-savebar .primary-button { width: auto; min-height: 43px; font-size: 11px; padding: 11px 16px; }
+.detail-save-actions { display: flex; gap: 10px; align-items: center; }
+.detail-save-actions .secondary-button { display: flex; gap: 7px; align-items: center; min-height: 43px; font-size: 11px; padding: 11px 16px; }
+.modal:has(.card-validation) { width: min(720px, calc(100vw - 32px)); }
+.validation-status { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 24px 8px; text-align: center; color: #496542; }
+.validation-status p, .validation-status small { font-size: 13px; line-height: 1.7; }
+.validation-status small { color: #7b8770; }
+.validation-proposals { list-style: none; padding: 0; display: grid; gap: 14px; }
+.validation-proposals li { border: 1px solid #dce0d2; border-radius: 12px; padding: 18px; background: #fffefa; overflow-wrap: anywhere; }
+.validation-proposals h3 { font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+.validation-definition { font-size: 13px; line-height: 1.8; white-space: pre-wrap; margin: 10px 0; }
+.validation-source { display: block; font-size: 11px; color: #7b8770; }
+.validation-card-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+.validation-card-actions .primary-button, .validation-actions .primary-button { width: auto; }
+.validation-decision, .validation-added { display: flex; gap: 7px; align-items: center; font-size: 12px; color: #496542; margin: 14px 0; }
+.validation-proposals .is-rejected { opacity: .6; }
+.validation-proposals .is-accepted { border-color: #9bab86; }
+.validation-actions { flex-wrap: wrap; margin-top: 16px; }
+@media (max-width: 700px) {
+  .detail-save-actions { width: 100%; flex-wrap: wrap; }
+  .detail-save-actions > button { flex: 1 1 auto; }
+}
 .undo-toast { position: fixed; bottom: 26px; left: calc(50% + 116px); transform: translateX(-50%); z-index: 18; display: flex; align-items: center; gap: 10px; color: #edf2e6; background: #263e2e; border: 1px solid #496542; border-radius: 10px; box-shadow: 0 5px 22px #172a2525; padding: 12px 15px; font-size: 11px; }
 .undo-toast > button:not(.icon-button) { display: flex; align-items: center; gap: 5px; border: 0; background: transparent; color: #d9edac; padding: 4px 6px; font-size: 11px; }
 .undo-toast .icon-button { width: 22px; height: 22px; padding: 0; border: 0; background: transparent; color: #aec0a4; }

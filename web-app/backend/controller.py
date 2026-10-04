@@ -1,16 +1,17 @@
-"""Browser interactions. The learning algorithm lives in study_engine.py unchanged."""
+"""Browser interactions and persisted learning preferences."""
 import copy
 import json
 import os
 import secrets
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from .study_engine import Phase, Question, RoundStatus, StudyConfig, StudySession
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 LEGACY_PATH = Path(__file__).resolve().parents[2] / "flashcard_progress.json"
+DEFAULT_CONFIG = replace(StudyConfig(), allow_multiple_choice=False, allow_reverse_direction=False)
 
 
 class InvalidAction(ValueError):
@@ -32,8 +33,8 @@ class WebStudy:
         self.raw_cards = raw_cards if raw_cards is not None else json.loads(
             (DATA_DIR / "flashcards.json").read_text(encoding="utf-8")
         )
-        self.session = StudySession(self.raw_cards, replace(config or StudyConfig(), allow_multiple_choice=False,
-                                                           allow_reverse_direction=False))
+        self.session = StudySession(self.raw_cards, replace(config or DEFAULT_CONFIG,
+                                                           allow_multiple_choice=False, allow_reverse_direction=False))
         self.history = []
         self.index = -1
         self.context = None
@@ -43,7 +44,8 @@ class WebStudy:
         if source is not None and source.exists():
             # Read the desktop save once. All subsequent writes target the web save.
             data = json.loads(source.read_text(encoding="utf-8"))
-            if data.get("version") == StudySession.VERSION:
+            if data.get("version") == StudySession.VERSION and not data.get("web_settings_version"):
+                # Desktop imports and older web saves used the fixed flashcard modes.
                 data["config"]["allow_multiple_choice"] = False
                 data["config"]["allow_reverse_direction"] = False
             self.session.restore(data)
@@ -68,10 +70,10 @@ class WebStudy:
         if context != self.context:
             self.history, self.index, self.context = [], -1, context
         question = self.session.next_question()
-        if question is not None and question.kind == "multiple_choice":
+        if question is not None and question.kind == "multiple_choice" and not self.session.config.allow_multiple_choice:
             question = replace(question, kind="free_recall", options=())
             self.session.current_question = question
-        if question is not None and question.direction == "reverse":
+        if question is not None and question.direction == "reverse" and not self.session.config.allow_reverse_direction:
             question = replace(question, direction="forward", prompt=question.answer, answer=question.prompt)
             self.session.current_question = question
         if question is None:
@@ -90,7 +92,7 @@ class WebStudy:
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix=".progress-",
                                              dir=self.path.parent, delete=False) as file:
                 temporary = Path(file.name)
-                json.dump(self.session.to_dict(), file, ensure_ascii=False, indent=2)
+                json.dump({**self.session.to_dict(), "web_settings_version": 1}, file, ensure_ascii=False, indent=2)
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(temporary, self.path)
@@ -164,6 +166,11 @@ class WebStudy:
                 raise InvalidAction("Écris une réponse avant de la vérifier.")
             view.typed_response = action.response
             self.record(response == " ".join(view.question.answer.casefold().split()))
+        elif kind == "choice":
+            if (view is None or view.answered or self.historical or view.question.kind != "multiple_choice"
+                    or type(action.choice) is not int or not 0 <= action.choice < len(view.question.options)):
+                raise InvalidAction("Choisis une réponse de la carte actuelle.")
+            self.record(view.question.options[action.choice] == view.question.answer)
         elif kind == "mode":
             if action.mode != "LEARN":
                 raise InvalidAction("Mode inconnu.")
@@ -172,19 +179,33 @@ class WebStudy:
                 self.notice = ""
                 self.load_next()
         elif kind == "settings":
-            if type(action.typed) is not bool:
-                raise InvalidAction("Préférence de réponse invalide.")
-            self.session.config = replace(self.session.config, allow_typed_recall=action.typed)
-            self.session.questions.config = self.session.config
-            self.session.memory.config = self.session.config
-            self.session.memory.mastery.config = self.session.config
-            self.session.scheduler.config = self.session.config
-            self.session.review_scheduler.config = self.session.config
-            if view is not None and not self.history[-1].answered:
-                pending = self.history[-1]
-                pending.question = replace(pending.question, kind="typed" if action.typed else "free_recall")
-                pending.showing_answer = False
-                self.session.current_question = pending.question
+            if action.defaults:
+                config = DEFAULT_CONFIG
+            elif action.config is not None:
+                try:
+                    config = replace(self.session.config, **action.config)
+                except (ValueError, TypeError) as error:
+                    raise InvalidAction("Paramètres invalides. Vérifie les nombres et les limites indiquées.") from error
+            elif type(action.typed) is bool:
+                # Compatibility with existing clients that change only written recall.
+                config = replace(self.session.config, allow_typed_recall=action.typed)
+                self.session.config = config
+                self.session.questions.config = self.session.memory.config = config
+                self.session.memory.mastery.config = config
+                self.session.scheduler.config = self.session.review_scheduler.config = config
+                if self.history and not self.history[-1].answered:
+                    pending = self.history[-1]
+                    pending.question = replace(pending.question, kind="typed" if action.typed else "free_recall", options=())
+                    pending.showing_answer = False
+                    self.session.current_question = pending.question
+                return
+            else:
+                raise InvalidAction("Choisis les paramètres à enregistrer.")
+            if config != self.session.config:
+                self.session.configure(config)
+                self.history, self.index, self.context = [], -1, None
+                self.notice = "Paramètres d’apprentissage enregistrés. Tes réponses sont conservées."
+                self.load_next()
         elif kind == "reset":
             self.session = StudySession(self.raw_cards, self.session.config)
             self.history, self.index, self.context = [], -1, None
@@ -209,6 +230,7 @@ class WebStudy:
             evidence = s.progress_for(card) or card
             current = dict(
                 card_id=card.id, kind=view.question.kind, direction=view.question.direction,
+                options=list(view.question.options),
                 text=view.question.answer if view.showing_answer else view.question.prompt,
                 showing_answer=view.showing_answer, answered=view.answered, correct=view.correct,
                 historical=self.historical, typed_response=view.typed_response,
@@ -229,6 +251,7 @@ class WebStudy:
             due_reviews=sum(c.next_review <= now for c in review_evidence),
             next_review_at=min(next_dates) if next_dates else None,
             typed_recall=s.config.allow_typed_recall,
+            config=asdict(s.config), default_config=asdict(DEFAULT_CONFIG),
             round_size=s.config.round_size, notice=self.notice, question=current,
             rounds=[dict(id=r.id, status=r.status, total=len(r.card_ids),
                          mastered=sum(by_id[i].mastered for i in r.card_ids)) for r in s.rounds],

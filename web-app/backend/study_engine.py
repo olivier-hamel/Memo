@@ -414,6 +414,43 @@ class StudySession:
                     # Review evidence is separate from both mastery phases.
                     card.review = MasteryProgress(**copy.deepcopy(data))
 
+    def configure(self, config):
+        """Apply settings without discarding answers or completed learning evidence."""
+        old_phase = self.phase
+        ordered = {c.id: c for c in self.cards}
+        ordered_cards = [ordered[i] for r in self.rounds for i in r.card_ids]
+        self.config = config
+        self.memory.config = self.memory.mastery.config = config
+        self.scheduler.config = self.review_scheduler.config = self.questions.config = config
+        # Completed initial groups remain acquired; the active phase uses the new criteria.
+        evidence = self.active_pool if old_phase == Phase.INITIAL_ROUND_LEARNING else [c.final for c in self.cards]
+        for progress in evidence:
+            if progress.attempts:
+                self.memory.mastery.update(progress)
+        manager = RoundManager(ordered_cards, config.round_size)
+        for group in manager.rounds:
+            if all(ordered[i].mastered for i in group.card_ids):
+                group.status = RoundStatus.COMPLETED
+                group.introduced_ids = list(group.card_ids)
+                manager.current_round_index += 1
+            else:
+                group.status = RoundStatus.ACTIVE
+                group.introduced_ids = [i for i in group.card_ids if ordered[i].attempts]
+                break
+        if manager.current_round_index == len(manager.rounds):
+            manager.phase = Phase.FINAL_MASTERY_ROUND
+            manager.final_round.status = RoundStatus.ACTIVE
+            if old_phase == Phase.INITIAL_ROUND_LEARNING:
+                for card in self.cards:
+                    card.final = MasteryProgress(state=State.UNTESTED, stability=card.stability)
+            manager.final_round.introduced_ids = [c.id for c in ordered_cards if c.final.attempts]
+            if all(c.final.mastered for c in self.cards):
+                manager.phase = Phase.COMPLETE
+                manager.final_round.status = RoundStatus.COMPLETED
+        self.round_manager = manager
+        # A prompt may now belong to another group or use a different response mode.
+        self.current_question = None
+
     def _allowed_cards(self, now):
         return self._review_cards(now) if self.mode == 'REVIEW' else self.active_pool
 

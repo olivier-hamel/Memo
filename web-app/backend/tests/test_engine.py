@@ -512,6 +512,58 @@ class EngineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 StudyConfig(**values)
 
+    def test_reconfigure_preserves_completed_groups_and_original_card_order(self):
+        s = self.make(12, StudyConfig(round_size=4, allow_multiple_choice=False))
+        self.finish_current_round(s)
+        s.next_question()
+        s.grade(True)
+        histories = [copy.deepcopy(c.history) for c in s.cards]
+        totals = (s.step, s.session_correct, s.session_wrong)
+        # Loading a differently ordered deck must not reorder the learning journey.
+        s = self.round_trip(s, [(c.term, c.definition) for c in reversed(s.cards)])
+        original_order = [i for r in s.rounds for i in r.card_ids]
+        s.configure(replace(s.config, round_size=3, familiar_after=3, minimum_successful_recalls=8))
+        self.assertEqual([i for r in s.rounds for i in r.card_ids], original_order)
+        self.assertEqual((s.step, s.session_correct, s.session_wrong), totals)
+        self.assertEqual([c.history for c in reversed(s.cards)], histories)
+        self.assertEqual(s.current_round_index, 1)
+        self.assertEqual(s.rounds[0].status, RoundStatus.COMPLETED)
+        self.assertTrue(all(c.mastered for c in s.cards if c.id in original_order[:4]))
+        restored = self.round_trip(s)
+        self.assertEqual(restored.rounds, s.rounds)
+        self.assertIn(restored.next_question().card_id, set(original_order[3:6]))
+
+    def test_reconfigure_final_and_completed_sessions_keeps_final_evidence(self):
+        s = self.make(6, StudyConfig(round_size=3, allow_multiple_choice=False))
+        self.start_final(s)
+        for _ in range(6):
+            s.next_question()
+            s.grade(True)
+        histories = [copy.deepcopy(c.final.history) for c in s.cards]
+        s.configure(replace(s.config, round_size=2, familiar_after=2))
+        self.assertEqual(s.phase, Phase.FINAL_MASTERY_ROUND)
+        self.assertEqual([c.final.history for c in s.cards], histories)
+        self.assertTrue(all(c.mastered for c in s.cards))
+        self.assertEqual(self.round_trip(s).phase, Phase.FINAL_MASTERY_ROUND)
+        self.finish_current_round(s)
+        histories = [copy.deepcopy(c.final.history) for c in s.cards]
+        s.configure(replace(s.config, minimum_successful_recalls=100, round_size=4))
+        self.assertEqual(s.phase, Phase.FINAL_MASTERY_ROUND)
+        self.assertEqual([c.final.history for c in s.cards], histories)
+        self.assertFalse(self.round_trip(s).complete)
+
+    def test_lowering_thresholds_can_complete_the_active_group(self):
+        s = self.make(4, StudyConfig(round_size=2, minimum_successful_recalls=100,
+                                    allow_multiple_choice=False))
+        for _ in range(20):
+            s.next_question()
+            s.grade(True)
+        self.assertEqual(s.current_round_index, 0)
+        s.configure(replace(s.config, minimum_successful_recalls=3))
+        self.assertEqual(s.current_round_index, 1)
+        self.assertTrue(all(c.mastered for c in s.cards[:2]))
+        self.assertEqual(self.round_trip(s).current_round_index, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

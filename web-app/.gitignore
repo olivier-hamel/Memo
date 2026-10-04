@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 backend/data/progress.json
 backend/data/.progress-*
+backend/data/reference-documents/
 test-results/
 playwright-report/
 *.log

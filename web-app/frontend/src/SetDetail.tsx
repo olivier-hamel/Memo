@@ -1,8 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, TextareaHTMLAttributes } from 'react'
 import { ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, Cloud, Download, Layers3, Link, LoaderCircle, LockKeyhole, Pencil, Plus, Save, Search, Trash2, Undo2, X } from 'lucide-react'
-import type { CardInput, CardSetDetail } from './types'
+import type { CardInput, CardSetDetail, ReferenceDocument } from './types'
 import { LibraryError, readLibrary } from './libraryApi'
+import DocumentWorkspace from './DocumentWorkspace'
+import { useValidationJobs } from './ValidationJobs'
+import type { ValidationDetail } from './ValidationJobs'
 
 type DraftCard = CardInput & { key: string }
 const draftCard = (card: CardInput = { term: '', definition: '' }): DraftCard => ({ ...card, key: crypto.randomUUID() })
@@ -26,8 +29,9 @@ function GrowingTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea {...props} ref={ref} rows={1} />
 }
 
-export default function SetDetail({ original, canCreate, onBack, onSaved, onStudy, onVersion, onDirty }: {
+export default function SetDetail({ original, initialValidation, canCreate, onBack, onSaved, onStudy, onVersion, onDirty }: {
   original: CardSetDetail | null
+  initialValidation?: ValidationDetail | null
   canCreate: boolean
   onBack: () => void
   onSaved: (deck: CardSetDetail) => void
@@ -35,12 +39,18 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
   onVersion: (version: number) => void
   onDirty: (dirty: boolean) => void
 }) {
-  const [title, setTitle] = useState(original?.title || '')
-  const [description, setDescription] = useState(original?.description || '')
-  const [cards, setCards] = useState<DraftCard[]>(() => (original?.cards || [{ term: '', definition: '' }]).map(draftCard))
+  const validation = useValidationJobs()
+  const [draftId] = useState(() => initialValidation?.draft_id || crypto.randomUUID())
+  const [title, setTitle] = useState(original?.title || initialValidation?.snapshot.title || '')
+  const [description, setDescription] = useState(original?.description || initialValidation?.snapshot.description || '')
+  const [cards, setCards] = useState<DraftCard[]>(() => (original?.cards || initialValidation?.snapshot.cards || [{ term: '', definition: '' }]).map(draftCard))
+  const [documents, setDocuments] = useState<ReferenceDocument[]>(original?.documents || initialValidation?.documents || [])
+  const [uploadingDocuments, setUploadingDocuments] = useState(false)
   const [saving, setBusy] = useState(false)
   const [importing, setImporting] = useState(false)
-  const busy = saving || importing
+  const [launchingValidation, setLaunchingValidation] = useState(false)
+  const busy = saving || importing || launchingValidation
+  const validating = validation.jobs.some(job => (job.set_id === original?.id || (!job.set_id && job.draft_id === draftId)) && (job.status === 'queued' || job.status === 'running'))
   const [importOpen, setImportOpen] = useState(false)
   const [quizletUrl, setQuizletUrl] = useState('')
   const [importError, setImportError] = useState('')
@@ -55,28 +65,50 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
   const form = useRef<HTMLFormElement>(null)
   const latest = !original || original.version === original.latest_version
   const editable = original ? original.editable && latest : canCreate
-  const originalValue = JSON.stringify({ title: original?.title || '', description: original?.description || '', cards: original?.cards || [{ term: '', definition: '' }] })
-  const dirty = editable && JSON.stringify({ title, description, cards: cardInputs(cards) }) !== originalValue
+  const originalValue = JSON.stringify({ title: original?.title || '', description: original?.description || '', cards: original?.cards || [{ term: '', definition: '' }], document_ids: (original?.documents || []).map(document => document.id) })
+  const dirty = editable && JSON.stringify({ title, description, cards: cardInputs(cards), document_ids: documents.map(document => document.id) }) !== originalValue
   const query = search.trim().toLocaleLowerCase('fr')
   const visible = cards.map((card, index) => ({ card, index })).filter(({ card }) => `${card.term} ${card.definition}`.toLocaleLowerCase('fr').includes(query))
 
-  useEffect(() => { onDirty(dirty || importing) }, [dirty, importing, onDirty])
+  useEffect(() => { onDirty(dirty || importing || uploadingDocuments) }, [dirty, importing, uploadingDocuments, onDirty])
   useEffect(() => {
-    if (!dirty && !importing) return
+    if (!dirty && !importing && !uploadingDocuments) return
     const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
     window.addEventListener('beforeunload', prevent)
     return () => window.removeEventListener('beforeunload', prevent)
-  }, [dirty, importing])
+  }, [dirty, importing, uploadingDocuments])
   useLayoutEffect(() => {
     if (newCardKey) form.current?.querySelector<HTMLTextAreaElement>(`[data-card-key="${newCardKey}"] textarea`)?.focus()
   }, [newCardKey])
 
+  useEffect(() => {
+    if (!editable) return
+    validation.register({ key: original?.id || draftId, cards: cardInputs(cards.filter(card => card.term.trim() || card.definition.trim())), accept: accepted => {
+      setCards(current => [...current.filter(card => card.term.trim() || card.definition.trim()), ...accepted.map(draftCard)])
+      setSearch(''); setSavedNotice(false)
+    } })
+    return () => validation.register(null)
+  }, [cards, editable, original?.id, draftId, validation.register])
+  const startValidation = async () => {
+    if (launchingValidation || validating || busy || uploadingDocuments) return
+    const values = cardInputs(cards.filter(card => card.term.trim() || card.definition.trim()))
+    if (!documents.length) { setError('Ajoute au moins un document de cours pour valider tes cartes.'); return }
+    if (!values.length || values.some(card => !card.term.trim() || !card.definition.trim())) {
+      setError('Complète le terme et la définition de chaque carte avant la validation.'); return
+    }
+    setLaunchingValidation(true); setError('')
+    try {
+      await validation.start({ title: title.trim() || 'Mon ensemble', description, set_id: original?.id || null,
+        draft_id: draftId, cards: values, document_ids: documents.map(document => document.id) })
+    } catch (caught) { setError((caught as Error).message) }
+    finally { setLaunchingValidation(false) }
+  }
   const update = (key: string, field: keyof CardInput, value: string) => {
     setCards(current => current.map(card => card.key === key ? { ...card, [field]: value } : card))
     setSavedNotice(false)
   }
   const save = async (studyAfter = false) => {
-    if (pending.current || !editable || !form.current?.reportValidity()) return
+    if (pending.current || launchingValidation || uploadingDocuments || !editable || !form.current?.reportValidity()) return
     const values = cardInputs(cards.filter(card => card.term.trim() || card.definition.trim()))
     if (!values.length) {
       setError('Ajoute au moins une carte avec un terme et une définition.'); return
@@ -91,10 +123,14 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
     setBusy(true); setError(''); setConflict(false)
     try {
       const deck = await readLibrary<CardSetDetail>(original ? `sets/${original.id}` : 'sets', {
-        title, description, cards: values, revision: original?.revision,
+        title, description, cards: values, revision: original?.revision, document_ids: documents.map(document => document.id),
       })
       onDirty(false)
       setRemoved(null); setSavedNotice(true)
+      if (!original && validation.jobs.some(job => job.draft_id === draftId)) {
+        try { await validation.link(draftId, deck.id) }
+        catch { /* The saved set is safe; the original validation draft remains reviewable. */ }
+      }
       onSaved(deck)
       if (studyAfter) onStudy(deck)
     } catch (caught) {
@@ -142,6 +178,7 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
   }
 
   return <form ref={form} className="set-detail" onSubmit={event => { event.preventDefault(); void save() }}>
+    <DocumentWorkspace documents={documents} onDocuments={setDocuments} editable={editable} disabled={busy} setId={original?.id} onUploading={setUploadingDocuments} header={<>
     <button className="back-to-library" type="button" onClick={onBack} disabled={busy}><ArrowLeft size={16} /> Mes ensembles</button>
     <div className="set-detail-heading">
       <div className="set-detail-title">
@@ -155,8 +192,9 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
         <div className="set-detail-meta"><span>{cards.length} carte{cards.length > 1 ? 's' : ''}</span><span className="meta-dot" />{editable ? <span><Pencil size={13} /> Clique sur un texte pour le modifier</span> : <span><LockKeyhole size={13} /> Lecture seule</span>}</div>
       </div>
       <div className="detail-heading-actions">
-        {editable && <button className="secondary-button detail-save" type="submit" disabled={busy || (!!original && !dirty)}><Save size={16} />{saving ? 'Enregistrement…' : original ? 'Enregistrer' : 'Créer l’ensemble'}</button>}
-        {original && <button className="primary-button" type="button" onClick={study} disabled={busy}><BookOpen size={18} />{dirty ? 'Enregistrer et étudier' : 'Étudier cet ensemble'}<ArrowRight size={16} /></button>}
+        {editable && <button className="secondary-button detail-save" type="submit" disabled={busy || uploadingDocuments || (!!original && !dirty)}><Save size={16} />{saving ? 'Enregistrement…' : original ? 'Enregistrer' : 'Créer l’ensemble'}</button>}
+        {editable && <button className="secondary-button" type="button" disabled={busy || uploadingDocuments || launchingValidation || validating} onClick={() => void startValidation()}><CheckCircle2 size={16} /> {validating ? 'Validation en cours…' : launchingValidation ? 'Lancement…' : 'Validation'}</button>}
+        {original && <button className="primary-button" type="button" onClick={study} disabled={busy || uploadingDocuments}><BookOpen size={18} />{dirty ? 'Enregistrer et étudier' : 'Étudier cet ensemble'}<ArrowRight size={16} /></button>}
       </div>
     </div>
 
@@ -177,6 +215,7 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
       {importNotice && <p className="quizlet-import-notice" role="status"><CheckCircle2 size={17} />{importNotice}</p>}
     </section>}
 
+    </>}>
     <section className="card-list-section" aria-labelledby="card-list-heading">
       <div className="card-list-toolbar">
         <div className="card-list-heading"><h2 id="card-list-heading">Les cartes</h2><span>{query ? `${visible.length} / ${cards.length}` : cards.length}</span></div>
@@ -205,11 +244,13 @@ export default function SetDetail({ original, canCreate, onBack, onSaved, onStud
     </section>
     {editable && <div className="detail-savebar">
       <div className={`detail-save-status ${dirty ? 'has-changes' : ''}`} role="status" aria-live="polite">{busy ? <Cloud size={17} /> : dirty || !original ? <span className="unsaved-dot" /> : <CheckCircle2 size={17} />}<span>{importing ? 'Import des cartes Quizlet…' : saving ? 'Enregistrement de ton ensemble…' : dirty ? 'Modifications non enregistrées' : savedNotice ? 'Toutes les modifications sont enregistrées' : original ? 'Toutes les modifications sont enregistrées' : 'Ton ensemble est prêt à prendre forme'}</span></div>
-      <button className="primary-button" type="submit" disabled={busy || (!!original && !dirty)}>{saving ? 'Enregistrement…' : original ? 'Enregistrer les modifications' : 'Créer l’ensemble'}<Check size={17} /></button>
+      <div className="detail-save-actions"><button className="secondary-button" type="button" disabled={busy || uploadingDocuments || launchingValidation || validating} onClick={() => void startValidation()}><CheckCircle2 size={17} /> {validating ? 'Validation en cours…' : launchingValidation ? 'Lancement…' : 'Validation'}</button>
+      <button className="primary-button" type="submit" disabled={busy || uploadingDocuments || (!!original && !dirty)}>{saving ? 'Enregistrement…' : original ? 'Enregistrer les modifications' : 'Créer l’ensemble'}<Check size={17} /></button></div>
     </div>}
     {removed && <div className="undo-toast" role="status"><Trash2 size={16} /><span>Carte supprimée</span><button type="button" disabled={busy || cards.length >= 300} onClick={() => {
       setCards(current => { const next = [...current]; next.splice(Math.min(removed.index, next.length), 0, removed.card); return next })
       setSearch(''); setRemoved(null)
     }}><Undo2 size={15} />Annuler</button><button className="icon-button" type="button" aria-label="Fermer la notification" onClick={() => setRemoved(null)}><X size={14} /></button></div>}
+    </DocumentWorkspace>
   </form>
 }

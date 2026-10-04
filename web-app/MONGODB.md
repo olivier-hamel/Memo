@@ -73,6 +73,14 @@ titre ou de description conserve la version des cartes. Les versions précédent
 restent accessibles dans la bibliothèque et leurs progrès restent disponibles.
 Le dernier choix d'ensemble/version est retenu dans le navigateur pour le compte.
 
+L’éditeur permet aussi d’ajouter plusieurs documents de cours PDF, PPT ou PPTX et
+de les lire à côté des cartes, avec zoom, navigation, notes du présentateur et
+séparation redimensionnable. Voir [le lecteur intégré](README.md#lire-les-documents-de-cours-dans-léditeur).
+Les `document_ids` sont enregistrés au niveau de l’ensemble, indépendamment des
+versions des cartes. Les PDF convertis et les notes restent sur le volume
+`memo_data/reference-documents`, avec des endpoints authentifiés. Les anciens
+ensembles n’ont besoin d’aucune migration ; ils commencent sans document.
+
 L'éditeur refuse les doublons exacts et les textes vides. Limites : 300 cartes par
 ensemble, 100 ensembles personnels, requêtes d'édition de 2 Mio, document avec
 historique limité à 12 Mio. Les sauvegardes concurrentes utilisent une révision

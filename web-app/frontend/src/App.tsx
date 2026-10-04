@@ -1,3 +1,4 @@
+import { ValidationSidebar } from './ValidationJobs'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
@@ -9,6 +10,7 @@ import type { Action, CardState, SetSelection, StudyState } from './types'
 import { apiFetch, memoBase } from './api'
 import { useAccount } from './AuthGate'
 import Modal from './Dialog'
+import StudySettingsDialog from './StudySettingsDialog'
 
 const stateLabels: Record<CardState, string> = {
   NEW: 'Nouvelle', UNTESTED: 'À confirmer', LEARNING: 'En apprentissage',
@@ -57,7 +59,7 @@ export default function App({ deck, onLibrary, onSet }: { deck?: SetSelection; o
   useEffect(() => { void load() }, [load])
 
   const act = useCallback(async (action: Action) => {
-    if (requestPending.current || !stateRef.current) return
+    if (requestPending.current || !stateRef.current) return false
     requestPending.current = true
     setBusy(true)
     setError('')
@@ -73,8 +75,9 @@ export default function App({ deck, onLibrary, onSet }: { deck?: SetSelection; o
       }
       receive(await response.json())
       if (action.type === 'grade') setAnnouncement(action.correct ? 'Bonne réponse enregistrée. Carte suivante.' : 'Carte à revoir enregistrée. Carte suivante.')
-      if (action.type === 'settings') setAnnouncement('Préférence enregistrée.')
+      if (action.type === 'settings') setAnnouncement('Paramètres d’apprentissage enregistrés.')
       if (action.type === 'reset') { setModal(null); setAnnouncement('Toute la progression de cet ensemble a été réinitialisée.') }
+      return true
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'La connexion a été interrompue. Actualise la session avant de continuer.')
       // Recover the authoritative state if the server saved before the connection broke.
@@ -82,6 +85,7 @@ export default function App({ deck, onLibrary, onSet }: { deck?: SetSelection; o
         const result = await apiFetch('state' + studyQuery, { cache: 'no-store' }).catch(() => null)
         if (result?.ok) receive(await result.json())
       }
+      return false
     } finally {
       requestPending.current = false
       setBusy(false)
@@ -137,6 +141,7 @@ export default function App({ deck, onLibrary, onSet }: { deck?: SetSelection; o
         <button className="nav-item" onClick={() => setModal('help')}><CircleHelp size={19} /><span>Aide</span></button>
         <button className="nav-item restart-progress-button" onClick={() => setModal('reset')} disabled={busy}><RotateCcw size={19} /><span>Recommencer la progression</span></button>
       </nav>
+      <ValidationSidebar />
       <div className="sidebar-deck">
         <span className="nav-label">TON ENSEMBLE</span>
         <div className="deck-cover"><div className="cover-lines" /><Sprout size={57} strokeWidth={1.2} /><span>LE SAVOIR<br />SE CULTIVE.</span><span className="cover-index">{deck ? `VERSION ${deck.version}` : '01 / ÉTHIQUE'}</span></div>
@@ -155,7 +160,7 @@ export default function App({ deck, onLibrary, onSet }: { deck?: SetSelection; o
 
         <div className="study-layout">
           <section className="study-column" aria-label="Session d’étude">
-            <div className="session-heading"><div className="session-icon"><Layers3 size={20} /></div><div><h2>{groupTitle}</h2><p>{groupCaption}</p></div><button className={`icon-button focus-button ${focusMode ? 'selected' : ''}`} title={focusMode ? 'Quitter le mode concentration' : 'Mode concentration'} aria-label={focusMode ? 'Quitter le mode concentration' : 'Mode concentration'} aria-pressed={focusMode} onClick={() => setFocusMode(!focusMode)}><Focus size={19} /></button></div>
+            <div className="session-heading"><div className="session-icon"><Layers3 size={20} /></div><div><h2>{groupTitle}</h2><p>{groupCaption}</p></div><button type="button" className="icon-button study-config-button" title="Configuration de l’apprentissage" aria-label="Configuration de l’apprentissage" onClick={() => setModal('settings')} disabled={busy}><Settings2 size={19} /></button><button className={`icon-button focus-button ${focusMode ? 'selected' : ''}`} title={focusMode ? 'Quitter le mode concentration' : 'Mode concentration'} aria-label={focusMode ? 'Quitter le mode concentration' : 'Mode concentration'} aria-pressed={focusMode} onClick={() => setFocusMode(!focusMode)}><Focus size={19} /></button></div>
 
             <div className="session-progress"><div className="thin-track"><div style={{ width: `${study.active_total ? study.active_mastered / study.active_total * 100 : 100}%` }} /></div><span>{`${study.active_mastered} / ${study.active_total || study.total} maîtrisées`}</span></div>
 
@@ -174,7 +179,7 @@ export default function App({ deck, onLibrary, onSet }: { deck?: SetSelection; o
               <div className="card-navigation"><button className="navigation-button" aria-label="Carte précédente" disabled={!q.can_previous || busy} onClick={() => void act({ type: 'navigate', direction: -1, response: draft })}><ArrowLeft size={17} /><span>Précédente</span></button><span className="navigation-position">Carte <strong>{String(q.position).padStart(2, '0')}</strong>{q.historical && <span> / {String(q.history_length).padStart(2, '0')}</span>}</span><button className="navigation-button" aria-label="Carte suivante" disabled={busy} onClick={() => void act({ type: 'navigate', direction: 1, response: draft })}><span>Suivante</span><ArrowRight size={17} /></button></div>
 
               <div className="answer-actions">
-                {q.historical ? <div className="history-message"><BookOpen size={17} /><span>Tu consultes une carte précédente. Reviens à la carte actuelle pour répondre.</span></div> : q.answered ? <><div className={`feedback ${q.correct ? 'correct-feedback' : 'wrong-feedback'}`}>{q.correct ? <CheckCircle2 size={18} /> : <RotateCcw size={18} />}{q.correct ? 'Bien joué, c’est la bonne réponse.' : 'Relis la correction. Tu la reverras au bon moment.'}</div><button className="primary-button" disabled={busy} onClick={() => void act({ type: 'navigate', direction: 1, response: draft })}>Continuer<ArrowRight size={17} /><Key>→</Key></button></> : typed ? <form className="typed-form" onSubmit={event => { event.preventDefault(); void act({ type: 'typed', response: draft }) }}><label htmlFor="typed-response">Rappelle-toi la réponse, puis écris-la.</label><textarea id="typed-response" ref={inputRef} value={draft} onChange={event => setDraft(event.target.value)} placeholder="Ta réponse…" rows={3} disabled={busy} onKeyDown={event => {
+                {q.historical ? <div className="history-message"><BookOpen size={17} /><span>Tu consultes une carte précédente. Reviens à la carte actuelle pour répondre.</span></div> : q.answered ? <><div className={`feedback ${q.correct ? 'correct-feedback' : 'wrong-feedback'}`}>{q.correct ? <CheckCircle2 size={18} /> : <RotateCcw size={18} />}{q.correct ? 'Bien joué, c’est la bonne réponse.' : 'Relis la correction. Tu la reverras au bon moment.'}</div><button className="primary-button" disabled={busy} onClick={() => void act({ type: 'navigate', direction: 1, response: draft })}>Continuer<ArrowRight size={17} /><Key>→</Key></button></> : q.kind === 'multiple_choice' && !q.showing_answer ? <div className="choice-answers" aria-label="Choix de réponse"><p>Choisis la bonne réponse.</p>{q.options.map((option, index) => <button type="button" className="secondary-button choice-answer" key={index} disabled={busy} onClick={() => void act({ type: 'choice', choice: index })}>{option}</button>)}</div> : typed ? <form className="typed-form" onSubmit={event => { event.preventDefault(); void act({ type: 'typed', response: draft }) }}><label htmlFor="typed-response">Rappelle-toi la réponse, puis écris-la.</label><textarea id="typed-response" ref={inputRef} value={draft} onChange={event => setDraft(event.target.value)} placeholder="Ta réponse…" rows={3} disabled={busy} onKeyDown={event => {
                   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (draft.trim()) void act({ type: 'typed', response: draft }) }
                 }} /><button className="primary-button" disabled={busy || !draft.trim()} type="submit">Vérifier ma réponse<Check size={17} /><Key>↵</Key></button><p>La réponse doit correspondre au texte de la carte. Majuscules et espaces sont ignorés.</p></form> : <>
                   <button className={`primary-button reveal-button ${q.showing_answer ? 'is-hidden' : ''}`} aria-hidden={q.showing_answer} disabled={busy || q.showing_answer} onClick={() => void act({ type: 'flip' })}>Révéler la réponse<ArrowDown size={17} /><Key>espace</Key></button>
@@ -203,7 +208,7 @@ export default function App({ deck, onLibrary, onSet }: { deck?: SetSelection; o
     </div>
 
     {modal === 'help' && <Modal title="Apprendre, simplement." onClose={closeModal}><div className="help-intro"><Sprout size={36} /><p>Un moteur qui suit tes progrès.<br />Un rythme qui te ressemble.</p></div><ol className="help-steps"><li><strong>Rappelle-toi avant de regarder.</strong><p>Lis le terme, formule ta réponse mentalement ou à voix haute, puis retourne la carte.</p></li><li><strong>Évalue ce que tu as retenu.</strong><p>« À revoir » enregistre une erreur. « Bien retenu » enregistre un succès. Un clic sur Suivante passe la carte sans l’évaluer.</p></li><li><strong>Progresse par petits groupes.</strong><p>Les {study.round_size} cartes de chaque groupe doivent être maîtrisées avant de passer au suivant. La maîtrise demande des succès répétés et espacés.</p></li><li><strong>Confirme tes acquis.</strong><p>La maîtrise finale mélange toutes les cartes et représente la seconde moitié de ta progression.</p></li></ol><div className="help-keyboard"><span><Key>espace</Key> Retourner</span><span><Key>←</Key><Key>→</Key> Naviguer</span><span><Key>1</Key> À revoir</span><span><Key>2</Key> Bien retenu</span></div><p className="modal-footnote">En saisie écrite, les touches servent à écrire. Entrée vérifie la réponse ; Maj + Entrée ajoute une ligne.</p></Modal>}
-    {modal === 'settings' && <Modal title="À ta façon." onClose={closeModal}><p className="modal-description">Choisis comment pratiquer le rappel actif.</p><div className="setting-row"><div><strong>Réponse écrite</strong><p>Écris ta réponse et vérifie-la avec Entrée. Tu peux toujours retourner la carte pour t’autoévaluer.</p></div><button className={`toggle ${study.typed_recall ? 'on' : ''}`} role="switch" aria-label="Réponse écrite" aria-checked={study.typed_recall} disabled={busy} onClick={() => void act({ type: 'settings', typed: !study.typed_recall })}><span /></button></div><p className="setting-tip">La vérification ignore la casse et les espaces. Le reste du texte doit correspondre à la réponse de la carte.</p>{account && <div className="account-actions"><button className="secondary-button" onClick={account.changePassword}>Changer mon mot de passe</button><button className="secondary-button" onClick={account.logout}>Se déconnecter</button></div>}</Modal>}
+    {modal === 'settings' && <StudySettingsDialog config={study.config} defaults={study.default_config} busy={busy} error={error} onSave={config => act({ type: 'settings', config })} onClose={closeModal} />}
     {modal === 'reset' && <Modal title="Une nouvelle page ?" onClose={closeModal}><p className="modal-description">Toute la progression de « {deckTitle} » (version {deck?.version || 1}) sera effacée : réponses, maîtrise des cartes et groupes terminés. Tu recommenceras au premier groupe.</p><div className="modal-actions"><button className="secondary-button" onClick={closeModal} disabled={busy}>Garder ma progression</button><button className="danger-button" disabled={busy} onClick={() => void act({ type: 'reset' })}>Recommencer</button></div>{error && <p role="alert">{error}</p>}</Modal>}
   </div>
 }

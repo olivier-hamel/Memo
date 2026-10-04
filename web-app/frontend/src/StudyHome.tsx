@@ -1,3 +1,5 @@
+import { ValidationSidebar, useValidationJobs } from './ValidationJobs'
+import type { ValidationDetail } from './ValidationJobs'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowRight, BookOpen, ChevronDown, Flower2, Layers3, LibraryBig, LockKeyhole, LogOut, Plus, Search, Settings2, Sprout, Users, X } from 'lucide-react'
 import App from './App'
@@ -9,11 +11,11 @@ import type { CardSet, CardSetDetail, SetSelection } from './types'
 import './library.css'
 
 type Library = { enabled: boolean; default_set_id?: string; sets: CardSet[] }
-type Route = { screen: 'library' } | { screen: 'new' } | { screen: 'set' | 'study'; id: string; version?: number }
+type Route = { screen: 'library' } | { screen: 'new'; jobId?: string } | { screen: 'set' | 'study'; id: string; version?: number }
 
 function getRoute(): Route {
   const parts = window.location.hash.slice(1).split('/')
-  if (parts[0] === 'new') return { screen: 'new' }
+  if (parts[0] === 'new') return { screen: 'new', jobId: parts[1] }
   if ((parts[0] === 'sets' || parts[0] === 'study') && parts[1]) {
     const version = Number(parts[2])
     return { screen: parts[0] === 'sets' ? 'set' : 'study', id: parts[1], version: Number.isSafeInteger(version) && version > 0 ? version : undefined }
@@ -21,7 +23,7 @@ function getRoute(): Route {
   return { screen: 'library' }
 }
 function routeHash(route: Route) {
-  return route.screen === 'library' ? '' : route.screen === 'new' ? '#new' : `#${route.screen === 'set' ? 'sets' : 'study'}/${route.id}${route.version ? `/${route.version}` : ''}`
+  return route.screen === 'library' ? '' : route.screen === 'new' ? `#new${route.jobId ? `/${route.jobId}` : ''}` : `#${route.screen === 'set' ? 'sets' : 'study'}/${route.id}${route.version ? `/${route.version}` : ''}`
 }
 const detailKey = (route: Route) => route.screen === 'set' ? `${route.id}:${route.version || 'latest'}` : ''
 
@@ -63,6 +65,8 @@ function SetLibrary({ library, recent, open, create, study }: {
 
 export default function StudyHome() {
   const account = useAccount()
+  const validation = useValidationJobs()
+  const [validationDraft, setValidationDraft] = useState<ValidationDetail | null>(null)
   const [library, setLibrary] = useState<Library | null>(null)
   const [route, setRoute] = useState<Route>(getRoute)
   const routeRef = useRef(route)
@@ -94,6 +98,23 @@ export default function StudyHome() {
     if (dirtyRef.current) { setPendingRoute(next); return }
     commit(next)
   }, [commit])
+  useEffect(() => {
+    const open = (event: Event) => {
+      const job = (event as CustomEvent<ValidationDetail>).detail
+      if (!job.set_id) setValidationDraft(job)
+      navigate(job.set_id ? { screen: 'set', id: job.set_id } : { screen: 'new', jobId: job.id })
+    }
+    window.addEventListener('memo:open-validation', open)
+    return () => window.removeEventListener('memo:open-validation', open)
+  }, [navigate])
+  useEffect(() => {
+    if (route.screen === 'new' && route.jobId && validationDraft?.id !== route.jobId) validation.review(route.jobId)
+  }, [route.screen === 'new' ? route.jobId : undefined])
+  useEffect(() => {
+    if (route.screen === 'new' && route.jobId && validation.selected?.id === route.jobId && validationDraft?.id !== route.jobId) {
+      setValidationDraft(validation.selected)
+    }
+  }, [route.screen === 'new' ? route.jobId : undefined, validation.selected, validationDraft?.id])
   const onDirty = useCallback((dirty: boolean) => { dirtyRef.current = dirty }, [])
   useEffect(() => {
     const changed = () => {
@@ -141,17 +162,20 @@ export default function StudyHome() {
     return <App key={`${selection.id}:${selection.version}`} deck={library.enabled ? selection : undefined} onLibrary={home} onSet={() => navigate({ screen: 'set', id: selection.id, version: selection.version === deck?.latest_version ? undefined : selection.version })} />
   }
   const currentDetail = detail?.key === key ? detail.deck : null
+  const restoredDraft = route.screen === 'new' && route.jobId
+    ? [validationDraft, validation.selected].find(job => job?.id === route.jobId) || null : null
 
   return <div className="collection-shell">
     <aside className="collection-sidebar">
       <button className="collection-brand" onClick={home} aria-label="Mémo, accueil"><Flower2 size={29} strokeWidth={1.7} /><span>mémo<span>.</span></span></button>
-      <nav aria-label="Navigation principale"><span className="collection-nav-label">MON ESPACE</span><button className="collection-nav-item active" onClick={home} aria-current={route.screen === 'library' ? 'page' : undefined}><LibraryBig size={19} /><span>Mes ensembles</span><span className="collection-nav-count">{library.sets.length}</span></button>{library.enabled && <button className="collection-nav-item" onClick={() => navigate({ screen: 'new' })}><Plus size={19} /><span>Créer un ensemble</span></button>}{account && <><button className="collection-nav-item" onClick={account.changePassword}><Settings2 size={19} /><span>Changer mon mot de passe</span></button><button className="collection-nav-item" onClick={account.logout}><LogOut size={19} /><span>Se déconnecter</span></button></>}</nav>
+      <nav aria-label="Navigation principale"><span className="collection-nav-label">MON ESPACE</span><button className="collection-nav-item active" onClick={home} aria-label="Mes ensembles" title="Mes ensembles" aria-current={route.screen === 'library' ? 'page' : undefined}><LibraryBig size={19} /><span>Mes ensembles</span><span className="collection-nav-count">{library.sets.length}</span></button>{library.enabled && <button className="collection-nav-item" onClick={() => navigate({ screen: 'new' })} aria-label="Créer un ensemble" title="Créer un ensemble"><Plus size={19} /><span>Créer un ensemble</span></button>}{account && <><button className="collection-nav-item" onClick={account.changePassword} aria-label="Changer mon mot de passe" title="Changer mon mot de passe"><Settings2 size={19} /><span>Changer mon mot de passe</span></button><button className="collection-nav-item" onClick={account.logout} aria-label="Se déconnecter" title="Se déconnecter"><LogOut size={19} /><span>Se déconnecter</span></button></>}</nav>
+      <ValidationSidebar />
       <div className="collection-sidebar-footer"><span className="collection-avatar">{account?.user.display_name.charAt(0).toUpperCase() || 'M'}</span><div><strong>{account?.user.display_name || 'Mon espace'}</strong><span>À mon rythme</span></div><Sprout size={17} /></div>
     </aside>
     <div className="collection-workspace">
       <main className="collection-main">
         {error && <div className="detail-error" role="alert"><span>{error}</span><button onClick={() => void load()}>Réessayer</button></div>}
-        {route.screen === 'library' ? <SetLibrary library={library} recent={recent} open={deck => navigate({ screen: 'set', id: deck.id })} create={() => navigate({ screen: 'new' })} study={startStudy} /> : route.screen === 'new' && !library.enabled ? <div className="collection-empty"><LockKeyhole size={30} /><h1>La création d’ensembles est indisponible.</h1><p>Ouvre ta bibliothèque connectée pour créer tes cartes.</p><button className="secondary-button" onClick={home}>Revenir à mes ensembles</button></div> : route.screen === 'new' || currentDetail ? <SetDetail key={route.screen === 'new' ? 'new' : `${currentDetail!.id}:${currentDetail!.version}:${currentDetail!.revision}`} original={route.screen === 'new' ? null : currentDetail} canCreate={library.enabled} onBack={home} onDirty={onDirty} onSaved={saveDetail} onStudy={deck => startStudy({ id: deck.id, title: deck.title, version: deck.version })} onVersion={version => {
+        {route.screen === 'library' ? <SetLibrary library={library} recent={recent} open={deck => navigate({ screen: 'set', id: deck.id })} create={() => navigate({ screen: 'new' })} study={startStudy} /> : route.screen === 'new' && !library.enabled ? <div className="collection-empty"><LockKeyhole size={30} /><h1>La création d’ensembles est indisponible.</h1><p>Ouvre ta bibliothèque connectée pour créer tes cartes.</p><button className="secondary-button" onClick={home}>Revenir à mes ensembles</button></div> : (route.screen === 'new' && (!route.jobId || restoredDraft)) || currentDetail ? <SetDetail key={route.screen === 'new' ? `new:${route.jobId || ''}` : `${currentDetail!.id}:${currentDetail!.version}:${currentDetail!.revision}`} initialValidation={restoredDraft} original={route.screen === 'new' ? null : currentDetail} canCreate={library.enabled} onBack={home} onDirty={onDirty} onSaved={saveDetail} onStudy={deck => startStudy({ id: deck.id, title: deck.title, version: deck.version })} onVersion={version => {
           // A conflict reload also needs to go through the unsaved-edit guard.
           if (route.screen === 'set') { navigate({ screen: 'set', id: route.id, version: version === currentDetail?.latest_version ? undefined : version }); if (!dirtyRef.current) { setDetail(null); setRetry(value => value + 1) } }
         }} /> : <div className="collection-loading" role={detailError ? 'alert' : 'status'}><Layers3 size={32} strokeWidth={1.4} /><h2>{detailError || 'Tes cartes se préparent…'}</h2>{detailError && <div><button className="secondary-button" onClick={home}>Mes ensembles</button><button className="primary-button" onClick={() => setRetry(value => value + 1)}>Réessayer</button></div>}</div>}

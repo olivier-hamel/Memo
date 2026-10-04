@@ -109,6 +109,75 @@ class ApiTests(unittest.TestCase):
         self.act("navigate", direction=1)
         self.assertFalse(self.state()["question"]["answered"])
 
+    def test_learning_settings_preserve_answers_regroup_and_survive_restart(self):
+        self.grade()
+        history = copy.deepcopy(self.app.state.study.session.cards[0].history)
+        response = self.act("settings", config={"round_size": 3, "familiar_after": 2,
+                            "minimum_successful_recalls": 5, "minimum_spaced_recalls": 3,
+                            "minimum_active_recall_successes": 2, "mastery_threshold": .9,
+                            "minimum_spacing_questions": 2, "minimum_spacing": 45,
+                            "weight_new": 5, "weight_learning": 8, "weight_familiar": 3,
+                            "weight_mastered": .3, "incorrect_answer_penalty": .4,
+                            "learning_interval": 20, "review_interval": 7200,
+                            "allow_typed_recall": True, "allow_reverse_direction": True,
+                            "reverse_after": 2, "allow_multiple_choice": False})
+        self.assertEqual(response.status_code, 200, response.text)
+        state = response.json()
+        self.assertEqual([r["total"] for r in state["rounds"]], [3, 1])
+        self.assertEqual(state["correct"], 1)
+        self.assertEqual(state["active_cards"][0]["state"], "LEARNING")
+        self.assertEqual(self.app.state.study.session.cards[0].history, history)
+        self.assertEqual(state["question"]["kind"], "typed")
+        with TestClient(create_app(self.path, None, CARDS)) as restarted:
+            restored = restarted.get("/api/state").json()
+            self.assertEqual(restored["config"], state["config"])
+            self.assertEqual(restored["rounds"], state["rounds"])
+            self.assertEqual(restored["correct"], 1)
+            self.assertEqual(restored["question"]["card_id"], state["question"]["card_id"])
+        restored = self.act("settings", defaults=True).json()
+        self.assertEqual(restored["config"], restored["default_config"])
+        self.assertEqual(restored["config"]["round_size"], 10)
+        self.assertFalse(restored["typed_recall"])
+        self.assertFalse(restored["config"]["allow_multiple_choice"])
+        self.assertEqual(restored["correct"], 1)
+
+    def test_invalid_settings_leave_saved_and_in_memory_progress_unchanged(self):
+        self.grade()
+        state, saved = self.state(), self.path.read_bytes()
+        for config in ({"round_size": 0}, {"round_size": True}, {"round_size": 2.5},
+                       {"minimum_successful_recalls": 1}, {"allow_typed_recall": 1},
+                       {"mastery_threshold": 1}, {"weight_learning": 0}, {"unknown": 4}):
+            with self.subTest(config=config):
+                self.assertEqual(self.act("settings", config=config).status_code, 400)
+                self.assertEqual(self.state(), state)
+                self.assertEqual(self.path.read_bytes(), saved)
+        with patch("backend.controller.os.replace", side_effect=OSError("disk full")):
+            self.assertEqual(self.act("settings", config={"round_size": 3}).status_code, 503)
+        self.assertEqual(self.state(), state)
+        self.assertEqual(self.path.read_bytes(), saved)
+
+    def test_optional_multiple_choice_and_reverse_modes_persist(self):
+        self.act("settings", config={"allow_multiple_choice": True, "allow_reverse_direction": True,
+                                     "reverse_after": 1})
+        state = self.state()
+        self.assertEqual(state["question"]["kind"], "multiple_choice")
+        self.assertNotIn("answer", state["question"])
+        self.assertEqual(self.act("choice", choice=99).status_code, 400)
+        answer = self.app.state.study.view.question.answer
+        choice = state["question"]["options"].index(answer)
+        answered = self.act("choice", choice=choice).json()
+        self.assertEqual(answered["correct"], 1)
+        self.assertTrue(answered["question"]["answered"])
+        self.assertEqual(self.act("choice", choice=choice).status_code, 400)
+        with TestClient(create_app(self.path, None, CARDS)) as restarted:
+            config = restarted.get("/api/state").json()["config"]
+            self.assertTrue(config["allow_multiple_choice"])
+            self.assertTrue(config["allow_reverse_direction"])
+        self.act("navigate", direction=1)
+        question = self.app.state.study.session.questions.select(
+            self.app.state.study.session.cards[0], self.app.state.study.session.active_pool)
+        self.assertEqual(question.direction, "reverse")
+
     def test_typed_incorrect_feedback_and_flip_fallback(self):
         self.act("settings", typed=True)
         state = self.act("typed", response="wrong").json()

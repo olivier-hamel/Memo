@@ -1,2 +1,3 @@
 -r requirements.lock.txt
 mongomock>=4.3,<5
+python-pptx>=1,<2

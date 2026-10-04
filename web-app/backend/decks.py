@@ -107,9 +107,10 @@ class MongoDecks:
         selected = next((v for v in document["versions"] if v["version"] == version), None)
         if selected is None:
             raise DeckError(404, "Version introuvable.")
-        return {**self.summary(document, user), "version": version, "cards": selected["cards"]}
+        return {**self.summary(document, user), "version": version, "cards": selected["cards"],
+                "document_ids": document.get("document_ids", [])}
 
-    def save(self, user, title, description, cards, identifier=None, revision=None):
+    def save(self, user, title, description, cards, identifier=None, revision=None, document_ids=None):
         title, description = title.strip(), description.strip()
         if not 1 <= len(title) <= 100 or len(description) > 1000:
             raise DeckError(400, "Vérifie le titre et la description de l’ensemble.")
@@ -121,7 +122,8 @@ class MongoDecks:
                 raise DeckError(400, "La bibliothèque contient déjà 100 ensembles personnels.")
             document = dict(_id=uuid.uuid4().hex, owner_id=user["id"], shared=False,
                 title=title, description=description, revision=new_revision, latest_version=1,
-                versions=[dict(version=1, cards=cards, card_count=len(cards))], created_at=now, updated_at=now)
+                versions=[dict(version=1, cards=cards, card_count=len(cards))], created_at=now, updated_at=now,
+                document_ids=document_ids or [])
             if len(BSON.encode(document)) > MAX_DOCUMENT_BYTES:
                 raise DeckError(400, "Cet ensemble est trop volumineux.")
             self._run(lambda: self.collection.insert_one(document))
@@ -136,6 +138,8 @@ class MongoDecks:
             document["latest_version"] += 1
             document["versions"].append(dict(version=document["latest_version"], cards=cards, card_count=len(cards)))
         document.update(title=title, description=description, revision=new_revision, updated_at=now)
+        if document_ids is not None:
+            document["document_ids"] = document_ids
         if len(BSON.encode(document)) > MAX_DOCUMENT_BYTES:
             raise DeckError(400, "L’historique de cet ensemble est plein. Crée une copie pour poursuivre.")
         result = self._run(lambda: self.collection.replace_one(

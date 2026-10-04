@@ -1,13 +1,17 @@
 """FastAPI app with isolated study sessions; run one Uvicorn worker."""
+import asyncio
 import json
 import os
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import RLock
 from typing import Literal
+from urllib.parse import unquote
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
@@ -15,6 +19,10 @@ from .controller import DATA_DIR, LEGACY_PATH, InvalidAction, WebStudy
 from .auth import Accounts, PASSWORDS, SESSION_SECONDS
 from .decks import DEFAULT_SET_ID, DeckError, MongoDecks, validate_cards
 from .quizlet import import_quizlet
+from .reference_documents import MAX_UPLOAD_BYTES, ReferenceDocuments
+from .card_validation import validate_coverage
+from .gemini_requests import GeminiRequests
+from .validation_jobs import ValidationJobs
 
 COOKIE = "memo_session"
 
@@ -33,13 +41,16 @@ class PasswordChange(BaseModel):
 
 class Action(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["flip", "grade", "navigate", "typed", "mode", "settings", "reset", "refresh"]
+    type: Literal["flip", "grade", "navigate", "typed", "choice", "mode", "settings", "reset", "refresh"]
     revision: str
     correct: StrictBool | None = None
     direction: StrictInt | None = None
     mode: Literal["LEARN"] | None = None
     response: str | None = None
     typed: StrictBool | None = None
+    choice: StrictInt | None = None
+    config: dict | None = None
+    defaults: StrictBool = False
 
 
 class CardInput(BaseModel):
@@ -54,11 +65,31 @@ class SetInput(BaseModel):
     description: str = Field(default="", max_length=1000)
     cards: list[CardInput] = Field(min_length=1, max_length=300)
     revision: str | None = Field(default=None, max_length=64)
+    document_ids: list[str] | None = Field(default=None, max_length=20)
 
 
 class QuizletInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     url: str = Field(min_length=1, max_length=2048)
+
+
+class ValidationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cards: list[CardInput] = Field(min_length=1, max_length=300)
+    document_ids: list[str] = Field(min_length=1, max_length=20)
+
+
+class BackgroundValidationInput(ValidationInput):
+    title: str = Field(default="Mon ensemble", min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    set_id: str | None = Field(default=None, max_length=64)
+    draft_id: str = Field(min_length=1, max_length=64)
+
+
+class ValidationLinkInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    set_id: str = Field(min_length=1, max_length=64)
+    draft_id: str = Field(min_length=1, max_length=64)
 
 
 def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, config=None,
@@ -75,6 +106,11 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
         app.state.lock = RLock()
         app.state.studies = {}
         app.state.decks = deck_repository if deck_repository is not None else MongoDecks.from_env()
+        app.state.documents = ReferenceDocuments(directory)
+        app.state.validations = asyncio.Semaphore(2)
+        app.state.gemini_requests = GeminiRequests()
+        app.state.validation_jobs = ValidationJobs(directory, app.state.validations, app.state.gemini_requests,
+            lambda *args, **kwargs: validate_coverage(*args, **kwargs))
         if auth_enabled:
             app.state.accounts = Accounts(directory, **({"clock": clock} if clock else {}))
         else:
@@ -84,6 +120,7 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
         try:
             yield
         finally:
+            await app.state.validation_jobs.close()
             if deck_repository is None and app.state.decks is not None:
                 app.state.decks.close()
 
@@ -91,7 +128,9 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
 
     @app.middleware("http")
     async def security(request: Request, call_next):
-        if request.url.path.removeprefix(request.scope.get("root_path", "")).startswith("/api/"):
+        path = request.url.path.removeprefix(request.scope.get("root_path", ""))
+        upload = path == "/api/reference-documents" and request.method == "POST"
+        if path.startswith("/api/"):
             if auth_enabled and not request.url.path.endswith("/api/health"):
                 if require_https and request.url.scheme != "https":
                     return JSONResponse({"detail": "Une connexion HTTPS est nécessaire."}, status_code=426)
@@ -99,9 +138,13 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
                     origin = request.headers.get("origin")
                     expected = f"{request.url.scheme}://{request.headers.get('host', '')}"
                     if (origin != expected or request.headers.get("x-memo-request") != "1"
-                            or request.headers.get("content-type", "").split(";")[0] != "application/json"):
+                            or request.headers.get("content-type", "").split(";")[0] != ("application/octet-stream" if upload else "application/json")):
                         return JSONResponse({"detail": "Requête refusée."}, status_code=403)
-            if request.url.path.removeprefix(request.scope.get("root_path", "")).startswith("/api/sets") and request.method == "POST":
+            if upload:
+                length = request.headers.get("content-length")
+                if length is not None and (not length.isdigit() or int(length) > MAX_UPLOAD_BYTES):
+                    return JSONResponse({"detail": "Le document doit peser au maximum 30 Mio."}, status_code=413)
+            if path.startswith("/api/sets") and request.method == "POST":
                 length = request.headers.get("content-length", "0")
                 if not length.isdigit() or int(length) > 2 * 1024 * 1024:
                     return JSONResponse({"detail": "Cet ensemble est trop volumineux."}, status_code=413)
@@ -179,13 +222,15 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
                 raise HTTPException(404, "Ensemble introuvable.")
             return deck
         user, repository = library_for(request)
-        return repository.get(user, identifier, version)
+        return app.state.documents.details(repository.get(user, identifier, version))
 
     @app.post("/api/sets", status_code=201)
     def create_set(body: SetInput, request: Request):
         user, repository = library_for(request)
+        app.state.documents.attachments(user, body.document_ids or [])
         with app.state.lock:
-            return repository.save(user, body.title, body.description, [card.model_dump() for card in body.cards])
+            return app.state.documents.details(repository.save(user, body.title, body.description,
+                [card.model_dump() for card in body.cards], document_ids=body.document_ids))
 
     @app.post("/api/sets/import/quizlet")
     async def quizlet_import(body: QuizletInput, request: Request):
@@ -195,7 +240,121 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
     @app.post("/api/sets/{identifier}")
     def edit_set(identifier: str, body: SetInput, request: Request):
         user, repository = library_for(request)
-        return repository.save(user, body.title, body.description, [card.model_dump() for card in body.cards], identifier, body.revision)
+        if body.document_ids is not None:
+            app.state.documents.attachments(user, body.document_ids)
+        return app.state.documents.details(repository.save(user, body.title, body.description,
+            [card.model_dump() for card in body.cards], identifier, body.revision, body.document_ids))
+
+    @app.post("/api/sets/validate/coverage")
+    async def validate_cards_coverage(body: ValidationInput, request: Request):
+        user, _ = library_for(request)
+        cards = [card.model_dump() for card in body.cards]
+        validate_cards(cards)
+        # Authorize every attachment before reading or sending anything to Gemini.
+        app.state.documents.attachments(user, body.document_ids)
+        documents = [{**app.state.documents.metadata(identifier), "path": app.state.documents.pdf_path(identifier)}
+            for identifier in body.document_ids]
+        if app.state.validations.locked():
+            raise HTTPException(503, "Deux validations sont déjà en cours. Réessaie dans un instant.")
+        async with app.state.validations:
+            validation = asyncio.create_task(validate_coverage(cards, documents,
+                cache_directory=app.state.documents.directory.parent / "validation-cache",
+                requests=app.state.gemini_requests))
+            async def cancel_on_disconnect():
+                while not validation.done():
+                    await asyncio.sleep(1)
+                    if await request.is_disconnected():
+                        validation.cancel()
+                        return
+            watcher = asyncio.create_task(cancel_on_disconnect())
+            try:
+                return await validation
+            except asyncio.CancelledError:
+                if await request.is_disconnected():
+                    return Response(status_code=499)
+                raise
+            finally:
+                validation.cancel()
+                watcher.cancel()
+                await asyncio.gather(validation, watcher, return_exceptions=True)
+
+    @app.post("/api/validation-jobs", status_code=202)
+    async def start_validation_job(body: BackgroundValidationInput, request: Request):
+        user, repository = library_for(request)
+        snapshot = body.model_dump()
+        validate_cards(snapshot["cards"])
+        if body.set_id:
+            deck = repository.get(user, body.set_id)
+            if not deck["editable"]:
+                raise HTTPException(403, "Cet ensemble ne peut pas être modifié.")
+        app.state.documents.attachments(user, body.document_ids)
+        documents = [{**app.state.documents.metadata(identifier), "path": app.state.documents.pdf_path(identifier)}
+            for identifier in body.document_ids]
+        return app.state.validation_jobs.start(user["id"], snapshot, documents)
+
+    @app.get("/api/validation-jobs")
+    async def list_validation_jobs(request: Request):
+        user, _ = library_for(request)
+        return {"jobs": app.state.validation_jobs.list(user["id"])}
+
+    @app.get("/api/validation-jobs/{identifier}")
+    async def get_validation_job(identifier: str, request: Request):
+        user, _ = library_for(request)
+        job = app.state.validation_jobs.get(user["id"], identifier)
+        return {**app.state.validation_jobs.summary(job), "snapshot": job["snapshot"],
+                "documents": job["documents"], "result": job["result"]}
+
+    @app.post("/api/validation-jobs/link")
+    async def link_validation_jobs(body: ValidationLinkInput, request: Request):
+        user, repository = library_for(request)
+        deck = repository.get(user, body.set_id)
+        if not deck["editable"]:
+            raise HTTPException(403, "Cet ensemble ne peut pas être modifié.")
+        for job in app.state.validation_jobs.jobs.values():
+            if job["owner"] == user["id"] and job["draft_id"] == body.draft_id and not job["set_id"]:
+                job["set_id"] = body.set_id
+                job["snapshot"]["set_id"] = body.set_id
+                app.state.validation_jobs.write(job)
+        return {"jobs": app.state.validation_jobs.list(user["id"])}
+
+    @app.post("/api/validation-jobs/{identifier}/read")
+    async def acknowledge_validation_job(identifier: str, request: Request):
+        user, _ = library_for(request)
+        return app.state.validation_jobs.acknowledge(user["id"], identifier)
+
+    @app.post("/api/reference-documents", status_code=201)
+    async def upload_document(request: Request):
+        user, _ = library_for(request)
+        name = unquote(request.headers.get("x-memo-filename", ""))
+        if Path(name).suffix.lower() not in (".pdf", ".ppt", ".pptx"):
+            raise HTTPException(400, "Choisis un fichier PDF, PPT ou PPTX.")
+        # Stream with a hard limit even when Content-Length is absent or dishonest.
+        with tempfile.TemporaryDirectory(prefix="memo-upload-") as temporary:
+            source = Path(temporary) / "upload"
+            size = 0
+            with source.open("wb") as output:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(413, "Le document doit peser au maximum 30 Mio.")
+                    output.write(chunk)
+            try:
+                return await run_in_threadpool(app.state.documents.create, user, source, name)
+            except OSError:
+                raise HTTPException(503, "Le document n’a pas pu être sauvegardé. Réessaie dans un instant.") from None
+
+    @app.get("/api/reference-documents/{identifier}")
+    def get_document(identifier: str, request: Request, set_id: str | None = None):
+        user, repository = library_for(request)
+        metadata = app.state.documents.authorize(user, identifier, repository, set_id)
+        return {**app.state.documents.public(metadata), "notes": metadata["notes"], "comments": metadata.get("comments", [])}
+
+    @app.get("/api/reference-documents/{identifier}/pdf")
+    def document_pdf(identifier: str, request: Request, set_id: str | None = None):
+        user, repository = library_for(request)
+        app.state.documents.authorize(user, identifier, repository, set_id)
+        return FileResponse(app.state.documents.pdf_path(identifier), media_type="application/pdf",
+            headers={"X-Content-Type-Options": "nosniff", "Content-Disposition": "inline"})
 
     def set_cookie(response, token):
         response.set_cookie(COOKIE, token, max_age=SESSION_SECONDS, httponly=True,

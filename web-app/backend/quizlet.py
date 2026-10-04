@@ -45,7 +45,7 @@ def api_key():
         except OSError:
             pass
     if not key:
-        raise DeckError(503, "L’import Quizlet n’est pas configuré. Contacte l’administrateur pour activer Gemini.")
+        raise DeckError(503, "L’import Quizlet n’est pas configuré. Contacte l’administrateur pour activer l'IA.")
     return key
 
 
@@ -201,18 +201,18 @@ async def extract_set(client, key, url, page):
                              "responseMimeType": "application/json", "responseJsonSchema": RESPONSE_SCHEMA},
     })
     if response.status_code in {400, 401, 403}:
-        raise DeckError(503, "Gemini refuse la configuration d’import. L’administrateur doit vérifier la clé API et l’accès au modèle.")
+        raise DeckError(503, "L'IA refuse la configuration d’import. L’administrateur doit vérifier la clé API et l’accès au modèle.")
     if response.status_code == 429:
-        raise DeckError(429, "Le quota gratuit de Gemini est atteint. Réessaie plus tard.")
+        raise DeckError(429, "Le quota gratuit de IA est atteint. Réessaie plus tard.")
     if not response.is_success:
-        raise DeckError(502, "Gemini est momentanément indisponible. Réessaie plus tard.")
+        raise DeckError(502, "L'IA est momentanément indisponible. Réessaie plus tard.")
     try:
         candidate = response.json()["candidates"][0]
         if candidate.get("finishReason") != "STOP":
             raise ValueError("Incomplete response")
         result = ExtractedSet.model_validate_json("".join(part.get("text", "") for part in candidate["content"]["parts"] if not part.get("thought")))
     except (AttributeError, KeyError, IndexError, TypeError, ValueError):
-        raise DeckError(422, "Gemini n’a pas pu extraire toutes les cartes. Réessaie avec un ensemble public contenant du texte.") from None
+        raise DeckError(422, "L'IA n’a pas pu extraire toutes les cartes. Réessaie avec un ensemble public contenant du texte.") from None
     if result.expected_count > 300:
         raise DeckError(422, "Cet ensemble dépasse la limite de 300 cartes. Choisis un ensemble plus petit.")
     if not result.complete or not result.cards or result.expected_count != len(result.cards):
@@ -273,4 +273,4 @@ async def import_quizlet(value):
     except (httpx.TimeoutException, asyncio.TimeoutError):
         raise DeckError(504, "L’import Quizlet a pris trop de temps. Réessaie dans un instant.") from None
     except httpx.HTTPError:
-        raise DeckError(502, "Impossible de joindre Quizlet ou Gemini. Réessaie dans un instant.") from None
+        raise DeckError(502, "Impossible de joindre Quizlet ou l'IA. Réessaie dans un instant.") from None
