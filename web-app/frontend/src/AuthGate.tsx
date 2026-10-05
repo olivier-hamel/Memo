@@ -90,8 +90,8 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         {passwordForm && <input name="username" type="hidden" value={user?.username} />}
         <label>{passwordForm ? 'Mot de passe actuel' : 'Mot de passe'}<input name="password" type="password" autoComplete="current-password" required maxLength={256} disabled={busy} /></label>
         {passwordForm && <>
-          <label>Nouveau mot de passe<input name="new_password" type="password" autoComplete="new-password" required minLength={12} maxLength={256} disabled={busy} /></label>
-          <label>Confirmer le nouveau mot de passe<input name="confirm_password" type="password" autoComplete="new-password" required minLength={12} maxLength={256} disabled={busy} /></label>
+          <label>Nouveau mot de passe<input name="new_password" type="password" autoComplete="new-password" required minLength={6} maxLength={256} disabled={busy} /></label>
+          <label>Confirmer le nouveau mot de passe<input name="confirm_password" type="password" autoComplete="new-password" required minLength={6} maxLength={256} disabled={busy} /></label>
           <small>Au moins 12 caractères. Une phrase facile à retenir fonctionne bien.</small>
         </>}
         <button className="primary-button" disabled={busy} type="submit">{busy ? 'Un instant…' : passwordForm ? 'Enregistrer le mot de passe' : 'Retrouver mes cartes'}<ArrowRight size={17} /></button>

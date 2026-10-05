@@ -24,8 +24,8 @@ def username(value):
 
 
 def validate_password(value):
-    if not 12 <= len(value) <= 256:
-        raise ValueError("Le mot de passe doit contenir entre 12 et 256 caractères.")
+    if not 6 <= len(value) <= 256:
+        raise ValueError("Le mot de passe doit contenir entre 6 et 256 caractères.")
 
 
 class Accounts:

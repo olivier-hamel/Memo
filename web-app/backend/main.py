@@ -10,6 +10,8 @@ from typing import Literal
 from urllib.parse import unquote
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
@@ -20,7 +22,7 @@ from .auth import Accounts, PASSWORDS, SESSION_SECONDS
 from .decks import DEFAULT_SET_ID, DeckError, MongoDecks, validate_cards
 from .quizlet import import_quizlet
 from .reference_documents import MAX_UPLOAD_BYTES, ReferenceDocuments
-from .card_validation import validate_coverage
+from .card_validation import PROJECT_TOO_LARGE, validate_coverage
 from .gemini_requests import GeminiRequests
 from .validation_jobs import ValidationJobs
 
@@ -36,7 +38,7 @@ class Login(BaseModel):
 class PasswordChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
     current_password: str = Field(min_length=1, max_length=256)
-    new_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=6, max_length=256)
 
 
 class Action(BaseModel):
@@ -166,6 +168,15 @@ def create_app(progress_path=None, legacy_path=LEGACY_PATH, raw_cards=None, conf
     @app.exception_handler(DeckError)
     async def deck_error(request, error):
         return JSONResponse({"detail": str(error)}, status_code=error.status)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_input_error(request, error):
+        path = request.url.path.removeprefix(request.scope.get("root_path", ""))
+        if path in ("/api/validation-jobs", "/api/sets/validate/coverage") and any(
+                item["type"] == "too_long" and item["loc"] in (("body", "cards"), ("body", "document_ids"))
+                for item in error.errors()):
+            return JSONResponse({"detail": PROJECT_TOO_LARGE}, status_code=413)
+        return await request_validation_exception_handler(request, error)
 
     def library_for(request):
         if not auth_enabled or app.state.decks is None:

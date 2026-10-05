@@ -1,6 +1,9 @@
+import copy
 import io
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -11,7 +14,8 @@ from pypdf import PdfReader, PdfWriter
 from fastapi.testclient import TestClient
 
 from backend.auth import Accounts
-from backend.card_validation import FILE_ROOT, GEMINI_URL, UPLOAD_URL, validate_coverage
+from backend.card_validation import (COUNT_URL, COVERAGE_SCHEMA, FILE_ROOT, GEMINI_URL,
+    MAX_INPUT_TOKENS, MAX_PDF_BYTES, PROJECT_TOO_LARGE, UPLOAD_URL, validate_coverage)
 from backend.decks import DeckError, MongoDecks
 from backend.gemini_requests import GeminiRequests
 from backend.main import create_app
@@ -37,20 +41,17 @@ class ValidationNetworkTests(unittest.IsolatedAsyncioTestCase):
         self.documents = [{"id": "doc1", "name": "Cours.pptx", "path": pdf, "page_count": 3,
             "notes": ["", "Notes de la deuxième slide.", ""], "comments": [[], [{"text": "Précision du professeur."}], []]},
             {"id": "doc2", "name": "Chapitre.pdf", "path": pdf, "page_count": 3, "notes": [], "comments": []}]
-        self.cards = CARDS
-        self.calls, self.contexts = [], []
-        self.facts = {("doc1", 2): [{"information": "Information manquante.", "evidence": "Notes de la deuxième slide."}]}
+        self.cards = copy.deepcopy(CARDS)
+        self.calls, self.payloads, self.progress = [], {}, []
+        self.result = {"analysis_complete": True, "project_too_large": False, "proposals": [copy.deepcopy(PROPOSAL)]}
         self.error_status = None
-        self.error_stage = None
+        self.error_stage = "generate"
         self.finish = "STOP"
         self.processing = False
         self.poll_status = None
         self.upload_target = UPLOAD_URL + "?session=1"
-        self.inventory_transform = lambda result: result
-        self.match_transform = lambda result: result
-        self.author_transform = lambda result: result
-        self.match_fact = lambda fact, cards: {"fact_index": fact["fact_index"], "status": "missing",
-            "card_evidence": [], "reason": "Information absente des cartes de ce groupe."}
+        self.count = 100
+        self.coordinator = GeminiRequests(rpm=0, tpm=0, retry_limit=0)
 
     async def run_validation(self):
         def handle(request):
@@ -69,36 +70,19 @@ class ValidationNetworkTests(unittest.IsolatedAsyncioTestCase):
             if request.method == "GET":
                 if self.poll_status:
                     return httpx.Response(self.poll_status)
-                return httpx.Response(200, json={"name": request.url.path.rsplit('/', 1)[-1],
-                    "uri": str(request.url), "state": "ACTIVE"})
-            self.assertEqual(str(request.url), GEMINI_URL)
-            body = json.loads(request.content)
-            parts = body["contents"][0]["parts"]
-            context = json.loads(parts[0]["text"])
-            self.contexts.append(context)
-            if self.error_status and (self.error_stage is None or self.error_stage == "match" and "facts" in context):
+                return httpx.Response(200, json={"uri": str(request.url), "state": "ACTIVE"})
+            stage = "count" if str(request.url) == COUNT_URL else "generate"
+            self.assertIn(str(request.url), (COUNT_URL, GEMINI_URL))
+            self.payloads.setdefault(stage, []).append(json.loads(request.content))
+            if self.error_status and self.error_stage == stage:
                 return httpx.Response(self.error_status)
-            if "original_pages" in context:
-                self.assertEqual(sum("fileData" in part for part in parts), 1)
-                self.assertNotIn("cards", context)
-                result = {"analysis_complete": True, "pages": [{"page": page,
-                    "has_information": bool(self.facts.get((context["id"], page))),
-                    "facts": self.facts.get((context["id"], page), [])} for page in context["original_pages"]]}
-                result = self.inventory_transform(result)
-            elif "facts" in context:
-                self.assertFalse(any("fileData" in part for part in parts))
-                result = self.match_transform({"analysis_complete": True,
-                    "matches": [self.match_fact(fact, context["cards"]) for fact in context["facts"]]})
-            else:
-                result = self.author_transform({"analysis_complete": True, "proposals": [
-                    {"term": "Question sur " + fact["information"], "definition": fact["information"],
-                        "fact_indices": [index]} for index, fact in enumerate(context["missing_facts"])]})
-            return generated(result, self.finish)
+            if stage == "count":
+                return httpx.Response(200, json={"totalTokens": self.count})
+            return generated(self.result, self.finish)
         client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
         with patch("backend.card_validation.api_key", return_value="test-secret"), patch("backend.card_validation.httpx.AsyncClient", return_value=client):
-            return await validate_coverage(self.cards, self.documents,
-                requests=GeminiRequests(rpm=0, tpm=0, retry_limit=0),
-                cache_directory=getattr(self, "cache_directory", None))
+            return await validate_coverage(self.cards, self.documents, requests=self.coordinator,
+                cache_directory=getattr(self, "cache_directory", None), progress=self.progress.append)
 
     def assert_cleaned(self):
         uploaded = sum("session=1" in str(call.url) for call in self.calls)
@@ -106,38 +90,28 @@ class ValidationNetworkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(set(deleted)), uploaded)
         self.assertEqual(len(deleted), uploaded)
 
-    async def test_all_pdf_pages_notes_and_comments_are_inventoried_before_matching(self):
+    async def test_full_pdfs_cards_notes_and_comments_are_sent_in_one_generation(self):
         result = await self.run_validation()
-        self.assertFalse(result["covered"])
-        self.assertEqual(len(result["proposals"]), 1)
-        proposal = result["proposals"][0]
-        self.assertEqual(proposal["document_id"], "doc1")
-        self.assertEqual(proposal["page"], 2)
-        self.assertEqual(proposal["definition"], "Information manquante.")
-        inventories = [context for context in self.contexts if "original_pages" in context]
-        self.assertEqual(len(inventories), 2)
-        source = next(context for context in inventories if context["id"] == "doc1")
-        self.assertEqual(source["annotations"][1]["notes"], "Notes de la deuxième slide.")
-        self.assertEqual(source["annotations"][1]["comments"][0]["text"], "Précision du professeur.")
-        self.assertEqual(result["checked_pages"], 6)
+        self.assertEqual(result, {"covered": False, "proposals": [PROPOSAL], "checked_pages": 6, "checked_cards": 1})
+        self.assertEqual(len(self.payloads["generate"]), 1)
+        self.assertEqual(len(self.payloads["count"]), 1)
+        payload = self.payloads["generate"][0]
+        parts = payload["contents"][0]["parts"]
+        context = json.loads(parts[0]["text"])
+        self.assertEqual(context["cards"], self.cards)
+        self.assertEqual([doc["id"] for doc in context["documents"]], ["doc1", "doc2"])
+        self.assertEqual(context["documents"][0]["annotations"][1]["notes"], "Notes de la deuxième slide.")
+        self.assertEqual(context["documents"][0]["annotations"][1]["comments"][0]["text"], "Précision du professeur.")
+        self.assertEqual(sum("fileData" in part for part in parts), 2)
+        self.assertEqual(json.loads(parts[1]["text"])["document_id"], "doc1")
+        self.assertEqual(json.loads(parts[3]["text"])["document_id"], "doc2")
+        counted = self.payloads["count"][0]["generateContentRequest"].copy()
+        self.assertEqual(counted.pop("model"), "models/gemini-3.5-flash-lite")
+        self.assertEqual(counted, payload)
+        self.assertEqual(payload["generationConfig"]["responseJsonSchema"], COVERAGE_SCHEMA)
         self.assert_cleaned()
 
-    async def test_many_documents_and_cards_find_fact_in_last_document(self):
-        self.documents = [{**self.documents[1], "id": f"doc{index}"} for index in range(20)]
-        self.cards = [{"term": f"Question {index}", "definition": f"Réponse existante {index}"} for index in range(300)]
-        self.facts = {("doc19", 3): [{"information": "Une information entièrement nouvelle du document de support.", "evidence": "Une information entièrement nouvelle."}]}
-        result = await self.run_validation()
-        self.assertFalse(result["covered"])
-        self.assertEqual(result["proposals"][0]["document_id"], "doc19")
-        inventories = [context for context in self.contexts if "original_pages" in context]
-        self.assertEqual({context["id"] for context in inventories}, {document["id"] for document in self.documents})
-        matches = [context for context in self.contexts if "facts" in context]
-        self.assertEqual({card["card_index"] for context in matches for card in context["cards"]}, set(range(300)))
-        self.assertTrue(all(len(context["cards"]) <= 60 for context in matches))
-        self.assertEqual(result["checked_cards"], 300)
-        self.assert_cleaned()
-
-    async def test_long_pdf_keeps_original_page_numbers_and_note_alignment(self):
+    async def test_long_pdf_is_not_split_and_all_300_cards_are_sent(self):
         path = Path(self.temp.name) / "Long.pdf"
         writer = PdfWriter()
         for _ in range(18):
@@ -145,109 +119,134 @@ class ValidationNetworkTests(unittest.IsolatedAsyncioTestCase):
         writer.write(path)
         self.documents = [{**self.documents[0], "path": path, "page_count": 18,
             "notes": [f"Note page {index + 1}" for index in range(18)], "comments": []}]
-        self.facts = {("doc1", 18): [{"information": "Dernière information.", "evidence": "Note page 18"}]}
+        self.cards = [{"term": f"Question {index}", "definition": "Détail complet " + "x" * 6000} for index in range(300)]
+        self.result["proposals"][0]["page"] = 18
         result = await self.run_validation()
-        inventories = sorted((context for context in self.contexts if "original_pages" in context), key=lambda context: context["original_pages"][0])
-        self.assertEqual([context["original_pages"] for context in inventories], [list(range(1, 9)), list(range(9, 17)), [17, 18]])
-        self.assertEqual(inventories[-1]["annotations"][-1]["notes"], "Note page 18")
-        self.assertEqual(result["proposals"][0]["page"], 18)
-        sizes = [len(PdfReader(io.BytesIO(call.content)).pages) for call in self.calls if "session=1" in str(call.url)]
-        self.assertEqual(sizes, [8, 8, 2])
+        uploads = [call for call in self.calls if "session=1" in str(call.url)]
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(uploads[0].content, path.read_bytes())
+        self.assertEqual(len(PdfReader(io.BytesIO(uploads[0].content)).pages), 18)
+        context = json.loads(self.payloads["generate"][0]["contents"][0]["parts"][0]["text"])
+        self.assertEqual(context["cards"], self.cards)
+        self.assertEqual(context["documents"][0]["annotations"][-1]["notes"], "Note page 18")
+        self.assertEqual(result["checked_cards"], 300)
+        self.assertEqual(len(self.payloads["generate"]), 1)
         self.assert_cleaned()
 
-    async def test_fact_covered_in_last_card_batch_does_not_get_proposed(self):
-        self.cards = [{"term": f"Question {index}", "definition": f"Réponse {index}"} for index in range(300)]
-        self.cards[-1]["definition"] = "Information manquante."
-        def match(fact, cards):
-            existing = next((card for card in cards if card["definition"] == fact["information"]), None)
-            return {"fact_index": fact["fact_index"], "status": "covered" if existing else "missing",
-                "card_evidence": [{"card_index": existing["card_index"], "quote": existing["definition"]}] if existing else [], "reason": "Comparaison explicite."}
-        self.match_fact = match
-        result = await self.run_validation()
-        self.assertTrue(result["covered"])
-        self.assertEqual(result["proposals"], [])
-        self.assertFalse(any("missing_facts" in context for context in self.contexts))
-
-    async def test_partial_coverage_split_across_card_batches_is_reconciled(self):
-        self.cards = [{"term": f"Question {index}", "definition": f"Autre réponse {index}"} for index in range(61)]
-        self.cards[0]["definition"] = "Première moitié."
-        self.cards[60]["definition"] = "Seconde moitié."
-        def match(fact, cards):
-            relevant = [card for card in cards if card["card_index"] in (0, 60)]
-            return {"fact_index": fact["fact_index"], "status": "covered" if len(relevant) == 2 else "partial" if relevant else "missing",
-                "card_evidence": [{"card_index": card["card_index"], "quote": card["definition"]} for card in relevant], "reason": "Couverture répartie sur deux cartes."}
-        self.match_fact = match
+    async def test_completed_empty_response_means_no_missing_information(self):
+        self.result["proposals"] = []
         self.assertTrue((await self.run_validation())["covered"])
-        reconciled = [context for context in self.contexts if "facts" in context and len(context["cards"]) == 2]
-        self.assertEqual(len(reconciled), 1)
+        self.assertEqual(len(self.payloads["generate"]), 1)
+        self.assert_cleaned()
 
-    async def test_large_card_text_is_batched_without_truncation(self):
-        self.cards = [{"term": f"Question {index}", "definition": f"Détail {index} " + "x" * 6000} for index in range(30)]
-        await self.run_validation()
-        matches = [context for context in self.contexts if "facts" in context]
-        supplied = {card["card_index"]: card["definition"] for context in matches for card in context["cards"]}
-        self.assertEqual(supplied, {index: card["definition"] for index, card in enumerate(self.cards)})
-        self.assertTrue(all(len(json.dumps(context["cards"], ensure_ascii=False)) < 61000 for context in matches))
-
-    async def test_empty_authoring_for_missing_information_never_claims_coverage(self):
-        self.author_transform = lambda result: {**result, "proposals": []}
+    async def test_incomplete_empty_response_never_claims_coverage(self):
+        self.result.update(analysis_complete=False, proposals=[])
         with self.assertRaises(DeckError) as caught:
             await self.run_validation()
         self.assertEqual(caught.exception.status, 422)
         self.assert_cleaned()
 
-    async def test_omitted_page_incomplete_page_and_truncation_never_claim_coverage(self):
-        for transform in [lambda result: {**result, "pages": result["pages"][:-1]},
-                lambda result: {**result, "analysis_complete": False},
-                lambda result: {**result, "pages": [{"page": page["page"], "has_information": True, "facts": []} for page in result["pages"]]}]:
-            self.calls = []; self.inventory_transform = transform
-            with self.assertRaises(DeckError):
-                await self.run_validation()
-            self.assert_cleaned()
-        self.calls = []; self.inventory_transform = lambda result: result; self.finish = "MAX_TOKENS"
-        with self.assertRaises(DeckError):
-            await self.run_validation()
-        self.assert_cleaned()
-
-    async def test_every_fact_requires_a_match_and_coverage_requires_real_card_quotes(self):
-        bad = [{"analysis_complete": True, "matches": []},
-            {"analysis_complete": True, "matches": [{"fact_index": 0, "status": "covered",
-                "card_evidence": [], "reason": "Assumption"}]},
-            {"analysis_complete": True, "matches": [{"fact_index": 0, "status": "covered",
-                "card_evidence": [{"card_index": 0, "quote": "Invented quotation"}], "reason": "Assumption"}]},
-            {"analysis_complete": True, "matches": [{"fact_index": 0, "status": "covered",
-                "card_evidence": [{"card_index": 99, "quote": "Réponse déjà couverte."}], "reason": "Assumption"}]}]
-        for result in bad:
-            self.calls = []; self.match_transform = lambda original: result
-            with self.assertRaises(DeckError):
-                await self.run_validation()
-            self.assert_cleaned()
-
-    async def test_empty_extraction_cannot_confirm_coverage(self):
-        self.facts = {}
-        with self.assertRaises(DeckError) as caught:
-            await self.run_validation()
-        self.assertEqual(caught.exception.status, 422)
-        self.assert_cleaned()
-
-    async def test_quota_and_provider_failures_cleanup(self):
-        for status, expected in [(429, 429), (403, 503), (500, 502)]:
-            self.calls = []; self.error_status = status
-            with self.assertRaises(DeckError) as caught:
-                await self.run_validation()
-            self.assertEqual(caught.exception.status, expected)
-            self.assert_cleaned()
-
-    async def test_page_limit_fails_before_any_external_call(self):
-        self.documents[0]["page_count"] = 1000
+    async def test_size_token_limit_rejects_before_generation_and_cleans_uploads(self):
+        self.count = MAX_INPUT_TOKENS + 1
         with self.assertRaises(DeckError) as caught:
             await self.run_validation()
         self.assertEqual(caught.exception.status, 413)
+        self.assertEqual(str(caught.exception), PROJECT_TOO_LARGE)
+        self.assertNotIn("generate", self.payloads)
+        self.assert_cleaned()
+
+    async def test_exact_token_limit_is_accepted_and_reserved_without_estimation(self):
+        self.count = MAX_INPUT_TOKENS
+        await self.run_validation()
+        self.assertEqual(self.coordinator.starts[-1][1], MAX_INPUT_TOKENS)
+        self.assertEqual(self.coordinator.starts[0][1], 0)
+        self.assert_cleaned()
+
+    async def test_lower_configured_token_quota_is_respected(self):
+        self.coordinator.tpm = 50
+        with self.assertRaises(DeckError) as caught:
+            await self.run_validation()
+        self.assertEqual(str(caught.exception), PROJECT_TOO_LARGE)
+        self.assertNotIn("generate", self.payloads)
+        self.assert_cleaned()
+
+    async def test_invalid_token_count_stops_before_generation(self):
+        for count in (None, True, -1, 0, "100"):
+            self.count = count
+            self.calls = []; self.payloads = {}
+            with self.assertRaises(DeckError) as caught:
+                await self.run_validation()
+            self.assertEqual(caught.exception.status, 502)
+            self.assertNotIn("generate", self.payloads)
+            self.assert_cleaned()
+
+    async def test_too_many_cards_documents_or_pages_fail_before_external_calls(self):
+        original_cards, original_documents = self.cards, self.documents
+        for kind in ("cards", "documents", "pages"):
+            self.cards = original_cards * 301 if kind == "cards" else original_cards
+            self.documents = original_documents * 11 if kind == "documents" else copy.deepcopy(original_documents)
+            if kind == "pages":
+                self.documents[0]["page_count"] = 1000
+            with self.assertRaises(DeckError) as caught:
+                await self.run_validation()
+            self.assertEqual(str(caught.exception), PROJECT_TOO_LARGE)
+            self.assertEqual(self.calls, [])
+
+    async def test_oversized_pdf_is_rejected_before_upload(self):
+        with self.documents[0]["path"].open("wb") as source:
+            source.truncate(MAX_PDF_BYTES + 1)
+        with self.assertRaises(DeckError) as caught:
+            await self.run_validation()
+        self.assertEqual(str(caught.exception), PROJECT_TOO_LARGE)
         self.assertEqual(self.calls, [])
 
-    async def test_processing_pdf_is_ready_before_analysis(self):
+    async def test_annotation_alignment_and_actual_page_count_are_checked_before_upload(self):
+        for changes in ({"page_count": 4}, {"notes": ["Une seule note"]}, {"comments": [[]]}):
+            original = self.documents[0]
+            self.documents[0] = {**original, **changes}
+            with self.assertRaises(DeckError):
+                await self.run_validation()
+            self.assertEqual(self.calls, [])
+            self.documents[0] = original
+
+    async def test_output_too_large_is_reported_without_division_or_followup(self):
+        for finish, too_large in (("MAX_TOKENS", False), ("STOP", True)):
+            self.finish = finish
+            self.result["project_too_large"] = too_large
+            self.calls = []; self.payloads = {}
+            with self.assertRaises(DeckError) as caught:
+                await self.run_validation()
+            self.assertEqual(str(caught.exception), PROJECT_TOO_LARGE)
+            self.assertEqual(len(self.payloads["generate"]), 1)
+            self.assert_cleaned()
+
+    async def test_invalid_source_blank_details_and_duplicates_do_not_claim_coverage(self):
+        bad = [{**PROPOSAL, "document_id": "unknown"}, {**PROPOSAL, "page": 4},
+            {**PROPOSAL, "evidence": " "}, {**PROPOSAL, "missing_information": " "},
+            {**PROPOSAL, **CARDS[0]}]
+        for proposal in bad:
+            self.result["proposals"] = [proposal]
+            self.calls = []; self.payloads = {}
+            with self.assertRaises(DeckError):
+                await self.run_validation()
+            self.assertEqual(len(self.payloads["generate"]), 1)
+            self.assert_cleaned()
+        self.result["proposals"] = [PROPOSAL, PROPOSAL]
+        with self.assertRaises(DeckError):
+            await self.run_validation()
+
+    async def test_quota_and_provider_failures_cleanup_at_count_and_generation(self):
+        for stage in ("count", "generate"):
+            for status, expected in ((429, 429), (403, 503), (500, 502)):
+                self.calls = []; self.payloads = {}; self.error_status = status; self.error_stage = stage
+                with self.assertRaises(DeckError) as caught:
+                    await self.run_validation()
+                self.assertEqual(caught.exception.status, expected)
+                self.assert_cleaned()
+
+    async def test_processing_pdf_is_ready_before_count_and_analysis(self):
         self.processing = True
-        self.assertFalse((await self.run_validation())["covered"])
+        await self.run_validation()
         self.assertEqual(sum(call.method == "GET" for call in self.calls), 2)
         self.assert_cleaned()
 
@@ -259,95 +258,70 @@ class ValidationNetworkTests(unittest.IsolatedAsyncioTestCase):
         self.assert_cleaned()
 
     async def test_untrusted_upload_location_never_receives_key_or_document(self):
-        for target in ["https://untrusted.test/upload", "http://generativelanguage.googleapis.com/upload", "https://generativelanguage.googleapis.com:bad/upload"]:
+        for target in ("https://untrusted.test/upload", "http://generativelanguage.googleapis.com/upload",
+                "https://generativelanguage.googleapis.com:bad/upload"):
             self.calls = []; self.upload_target = target
             with self.assertRaises(DeckError):
                 await self.run_validation()
             self.assertTrue(all(str(call.url) == UPLOAD_URL for call in self.calls))
 
-    async def test_identical_validation_reuses_all_completed_steps_without_network(self):
+    async def test_identical_validation_reuses_completed_result_without_network(self):
         self.cache_directory = Path(self.temp.name) / "cache"
         first = await self.run_validation()
-        self.calls = []; self.contexts = []
-        second = await self.run_validation()
-        self.assertEqual(first, second)
+        self.calls = []; self.payloads = {}
+        self.assertEqual(await self.run_validation(), first)
         self.assertEqual(self.calls, [])
-        for checkpoint in self.cache_directory.glob("*.json"):
-            content = checkpoint.read_text()
-            self.assertNotIn("test-secret", content)
-            self.assertNotIn(FILE_ROOT, content)
-            self.assertEqual(checkpoint.stat().st_mode & 0o777, 0o600)
+        checkpoints = list(self.cache_directory.glob("*.json"))
+        self.assertEqual(len(checkpoints), 1)
+        content = checkpoints[0].read_text()
+        self.assertNotIn("test-secret", content)
+        self.assertNotIn(FILE_ROOT, content)
+        self.assertEqual(checkpoints[0].stat().st_mode & 0o777, 0o600)
 
-    async def test_card_changes_reuse_source_extraction_but_recheck_cards(self):
+    async def test_changed_cards_notes_comments_or_pdf_invalidate_result(self):
         self.cache_directory = Path(self.temp.name) / "cache"
         await self.run_validation()
-        self.cards = [{"term": "Nouvelle question", "definition": "Nouvelle réponse"}]
-        self.calls = []; self.contexts = []
-        await self.run_validation()
-        self.assertTrue(self.calls)
-        self.assertTrue(all(str(call.url) == GEMINI_URL for call in self.calls))
-        self.assertTrue(any("facts" in context for context in self.contexts))
-        self.assertFalse(any("original_pages" in context for context in self.contexts))
+        for kind in ("cards", "notes", "comments", "pdf"):
+            if kind == "cards":
+                self.cards[0]["definition"] = "Autre réponse"
+            elif kind == "notes":
+                self.documents[0]["notes"][1] = "Note mise à jour"
+            elif kind == "comments":
+                self.documents[0]["comments"][1] = [{"text": "Autre commentaire"}]
+            else:
+                writer = PdfWriter()
+                for _ in range(3):
+                    writer.add_blank_page(width=601, height=800)
+                writer.write(self.documents[0]["path"])
+            self.calls = []; self.payloads = {}
+            await self.run_validation()
+            self.assertEqual(len(self.payloads["generate"]), 1)
+            self.assert_cleaned()
 
-    async def test_changed_notes_invalidate_only_the_affected_document_inventory(self):
+    async def test_invalid_or_expired_cached_result_is_recomputed(self):
         self.cache_directory = Path(self.temp.name) / "cache"
-        await self.run_validation()
-        self.documents[0]["notes"][1] = "Notes mises à jour."
-        self.facts[("doc1", 2)] = [{"information": "Nouvelle information.", "evidence": "Notes mises à jour."}]
-        self.calls = []; self.contexts = []
-        result = await self.run_validation()
-        inventories = [context for context in self.contexts if "original_pages" in context]
-        self.assertEqual([context["id"] for context in inventories], ["doc1"])
-        self.assertEqual(result["proposals"][0]["definition"], "Nouvelle information.")
+        first = await self.run_validation()
+        for expired in (False, True):
+            checkpoint = next(self.cache_directory.glob("*.json"))
+            if expired:
+                stamp = time.time() - 31 * 86400
+                os.utime(checkpoint, (stamp, stamp))
+            else:
+                value = json.loads(checkpoint.read_text())
+                value["proposals"][0]["page"] = 999
+                checkpoint.write_text(json.dumps(value))
+            self.calls = []; self.payloads = {}
+            self.assertEqual(await self.run_validation(), first)
+            self.assertEqual(len(self.payloads["generate"]), 1)
+            self.assert_cleaned()
 
-    async def test_quota_failure_keeps_completed_inventories_for_retry(self):
+    async def test_failed_generation_is_not_cached(self):
         self.cache_directory = Path(self.temp.name) / "cache"
-        self.error_stage = "match"; self.error_status = 429
+        self.result["analysis_complete"] = False
         with self.assertRaises(DeckError):
             await self.run_validation()
-        self.error_status = None; self.calls = []; self.contexts = []
-        result = await self.run_validation()
-        self.assertFalse(result["covered"])
-        self.assertTrue(all(str(call.url) == GEMINI_URL for call in self.calls))
-        self.assertFalse(any("original_pages" in context for context in self.contexts))
-
-    async def test_pdf_content_change_invalidates_inventory(self):
-        self.cache_directory = Path(self.temp.name) / "cache"
-        await self.run_validation()
-        writer = PdfWriter()
-        for _ in range(3):
-            writer.add_blank_page(width=601, height=800)
-        writer.write(self.documents[0]["path"])
-        self.calls = []; self.contexts = []
-        await self.run_validation()
-        self.assertEqual(sum("original_pages" in context for context in self.contexts), 2)
-
-    async def test_cached_coverage_is_still_checked_against_real_card_text(self):
-        self.cache_directory = Path(self.temp.name) / "cache"
-        first = await self.run_validation()
-        for checkpoint in self.cache_directory.glob("*.json"):
-            value = json.loads(checkpoint.read_text())
-            if "matches" in value:
-                value["matches"][0].update(status="covered", card_evidence=[{"card_index": 0, "quote": "Invented quotation"}])
-                checkpoint.write_text(json.dumps(value))
-        self.calls = []; self.contexts = []
-        second = await self.run_validation()
-        self.assertEqual(first, second)
-        self.assertEqual(sum("facts" in context for context in self.contexts), 1)
-
-    async def test_expired_cache_is_recomputed(self):
-        import os
-        import time
-        self.cache_directory = Path(self.temp.name) / "cache"
-        first = await self.run_validation()
-        expired = time.time() - 31 * 86400
-        for checkpoint in self.cache_directory.glob("*.json"):
-            os.utime(checkpoint, (expired, expired))
-        self.calls = []; self.contexts = []
-        second = await self.run_validation()
-        self.assertEqual(first, second)
-        self.assertEqual(sum("original_pages" in context for context in self.contexts), 2)
-
+        self.assertEqual(list(self.cache_directory.glob("*.json")), [])
+        self.assert_cleaned()
 
 
 class ValidationAPITests(unittest.TestCase):
@@ -397,6 +371,18 @@ class ValidationAPITests(unittest.TestCase):
             "document_ids": [self.document["id"]]}).status_code, 403)
         self.client.cookies.clear()
         self.assertEqual(self.validate().status_code, 401)
+
+    def test_oversized_validation_requests_return_project_size_message(self):
+        with patch("backend.main.validate_coverage", new_callable=AsyncMock) as service:
+            for route in ("/api/sets/validate/coverage", "/api/validation-jobs"):
+                for changes in ({"cards": CARDS * 301}, {"document_ids": [self.document["id"]] * 21}):
+                    payload = {"cards": CARDS, "document_ids": [self.document["id"]], **changes}
+                    if route == "/api/validation-jobs":
+                        payload["draft_id"] = "oversized-draft"
+                    response = self.client.post(route, json=payload, headers=self.headers)
+                    self.assertEqual(response.status_code, 413, response.text)
+                    self.assertEqual(response.json()["detail"], PROJECT_TOO_LARGE)
+            service.assert_not_called()
 
     def test_closing_the_request_cancels_validation_and_releases_the_slot(self):
         import asyncio

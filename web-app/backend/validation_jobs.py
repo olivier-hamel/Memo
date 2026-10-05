@@ -28,7 +28,7 @@ class ValidationJobs:
                     path.unlink()
                     continue
                 if job["status"] in ACTIVE:
-                    job.update(status="failed", error="Le serveur a redémarré pendant la validation. Réessaie pour reprendre les étapes conservées.", unread=True)
+                    job.update(status="failed", error="Le serveur a redémarré pendant la validation. Réessaie la validation.", unread=True)
                     self.write(job)
                 self.jobs[job["id"]] = job
             except (OSError, ValueError, KeyError, TypeError):
@@ -103,13 +103,13 @@ class ValidationJobs:
                     raise DeckError(422, "Tous les documents et toutes les cartes n’ont pas été vérifiés. Réessaie.")
                 job.update(status="completed", progress="Validation terminée", result=result, unread=True)
         except asyncio.CancelledError:
-            job.update(status="failed", error="La validation a été interrompue. Réessaie pour reprendre les étapes conservées.", unread=True)
+            job.update(status="failed", error="La validation a été interrompue. Réessaie la validation.", unread=True)
             raise
         except DeckError as error:
             job.update(status="failed", error=str(error), unread=True)
         except Exception:
             logging.getLogger(__name__).exception("Background validation failed")
-            job.update(status="failed", error="La validation a échoué. Les étapes terminées sont conservées ; réessaie.", unread=True)
+            job.update(status="failed", error="La validation a échoué. Réessaie dans un instant.", unread=True)
         finally:
             self.write(job)
 

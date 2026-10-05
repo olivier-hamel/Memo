@@ -39,18 +39,18 @@ def quota_details(response):
 def quota_error(response):
     kind, _ = quota_details(response)
     if kind == "daily":
-        return DeckError(429, "Le quota quotidien Gemini du projet est épuisé. Les étapes terminées sont conservées ; réessaie après sa réinitialisation ou vérifie le niveau de facturation dans Google AI Studio.")
+        return DeckError(429, "Le quota quotidien Gemini du projet est épuisé. Réessaie après sa réinitialisation ou vérifie le niveau de facturation dans Google AI Studio.")
     if kind == "unavailable":
         return DeckError(429, "Aucun quota Gemini n’est disponible pour ce modèle. Vérifie l’accès au modèle et le niveau du projet dans Google AI Studio.")
     if kind == "minute":
-        return DeckError(429, "La limite Gemini par minute est atteinte. Les étapes terminées sont conservées ; attends un peu puis réessaie.")
-    return DeckError(429, "Gemini a atteint une limite de quota. Les étapes terminées sont conservées ; vérifie les limites du projet dans Google AI Studio avant de réessayer.")
+        return DeckError(429, "La limite Gemini par minute est atteinte. Attends un peu puis réessaie.")
+    return DeckError(429, "Gemini a atteint une limite de quota. Vérifie les limites du projet dans Google AI Studio avant de réessayer.")
 
 
 class GeminiRequests:
     def __init__(self, rpm=None, tpm=None, retry_limit=2, *, now=time.monotonic, sleep=asyncio.sleep):
-        self.rpm = float(os.environ.get("MEMO_GEMINI_RPM", "5")) if rpm is None else rpm
-        self.tpm = int(os.environ.get("MEMO_GEMINI_TPM", "100000")) if tpm is None else tpm
+        self.rpm = float(os.environ.get("MEMO_GEMINI_RPM", "10")) if rpm is None else rpm
+        self.tpm = int(os.environ.get("MEMO_GEMINI_TPM", "250000")) if tpm is None else tpm
         if not math.isfinite(self.rpm) or self.rpm < 0 or self.tpm < 0:
             raise ValueError("Gemini rate limits must be non-negative")
         self.retry_limit, self.now, self.sleep = retry_limit, now, sleep
@@ -80,12 +80,12 @@ class GeminiRequests:
                 delay = ready - now
             await self.sleep(delay)
 
-    async def post(self, client, url, *, headers, json):
+    async def post(self, client, url, *, headers, json, input_tokens=None):
         # Conservative input estimate; the real provider count replaces it on success.
         parts = json.get("contents", [{}])[0].get("parts", [])
         text_bytes = sum(len(part.get("text", "").encode()) for part in parts)
         system_bytes = sum(len(part.get("text", "").encode()) for part in json.get("systemInstruction", {}).get("parts", []))
-        estimate = math.ceil((text_bytes + system_bytes) / 2) + sum(8192 for part in parts if "fileData" in part)
+        estimate = input_tokens if input_tokens is not None else math.ceil((text_bytes + system_bytes) / 2) + sum(8192 for part in parts if "fileData" in part)
         for attempt in range(self.retry_limit + 1):
             reservation = await self.reserve(estimate)
             response = await client.post(url, headers=headers, json=json)

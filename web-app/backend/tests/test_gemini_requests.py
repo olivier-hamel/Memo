@@ -1,5 +1,7 @@
 import asyncio
+import os
 import unittest
+from unittest.mock import patch
 
 import httpx
 
@@ -36,6 +38,21 @@ class GeminiRequestTests(unittest.IsolatedAsyncioTestCase):
 
     def coordinator(self, **values):
         return GeminiRequests(now=self.clock.now, sleep=self.clock.sleep, **values)
+
+    def test_defaults_match_configured_project_quota_and_environment_can_override(self):
+        with patch.dict(os.environ, {}, clear=True):
+            coordinator = self.coordinator()
+            self.assertEqual((coordinator.rpm, coordinator.tpm), (10, 250000))
+        with patch.dict(os.environ, {"MEMO_GEMINI_RPM": "3", "MEMO_GEMINI_TPM": "50000"}):
+            coordinator = self.coordinator()
+            self.assertEqual((coordinator.rpm, coordinator.tpm), (3, 50000))
+
+    async def test_measured_tokens_control_budget_instead_of_file_estimate(self):
+        coordinator = self.coordinator(rpm=0, tpm=100)
+        payload = {"contents": [{"parts": [{"fileData": {"mimeType": "application/pdf", "fileUri": "files/example"}}]}]}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))) as client:
+            await coordinator.post(client, "https://example.test/generate", headers={}, json=payload, input_tokens=60)
+        self.assertEqual(coordinator.starts[-1][1], 60)
 
     async def test_concurrent_validations_share_request_pacing(self):
         coordinator = self.coordinator(rpm=5, tpm=0)

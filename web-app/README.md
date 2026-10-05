@@ -144,75 +144,72 @@ Un brouillon abandonné peut également laisser des fichiers sur ce volume.
 
 Dans l’éditeur, **Validation**, à côté de l’enregistrement, compare les cartes
 actuelles (y compris les modifications non enregistrées) avec tous les documents
-de référence joints. Le backend transmet les PDF complets à Gemini, ainsi que
-les notes et commentaires des PowerPoint, associés à leur diapositive.
-La clé et le modèle sont ceux déjà configurés pour l’import Quizlet.
+joints. Le backend téléverse les PDF complets, sans découpage, puis les transmet
+ensemble à Gemini avec toutes les questions/réponses et les notes/commentaires
+des PowerPoint associés à leurs diapositives. La clé et le modèle sont ceux de
+l’import Quizlet.
 
-Les PDF sont découpés en extraits de huit pages avec leurs notes et commentaires.
-L’IA inventorie les informations de chaque page, puis compare chaque information
-aux cartes complètes, par groupes de 60 cartes au maximum et avec une limite de
-taille du texte. Une information n’est déclarée couverte qu’avec des citations
-vérifiées des cartes correspondantes. Les couvertures partielles réparties entre
-plusieurs groupes sont revérifiées ensemble. Aucun nom de cours ou scénario
-particulier ne détermine le résultat.
+Un appel `countTokens` mesure d’abord la taille de cette demande complète. Si
+elle tient dans les limites, **un seul appel de génération** analyse le cours,
+compare le sens des informations avec les cartes existantes et rédige directement
+les cartes nécessaires pour les informations absentes ou incomplètes. La réponse
+est un objet JSON conforme à un schéma ; elle ne contient ni inventaire
+intermédiaire ni citations des cartes existantes. Chaque proposition indique
+l’information manquante, son document et sa page. Les informations déjà
+enseignées dans plusieurs cartes ensemble sont prises en compte.
 
-La validation démarre en arrière-plan : un encart **Validations** dans la barre
-latérale affiche l’attente, les pages lues puis la comparaison et la rédaction.
-Tu peux continuer à modifier des cartes, étudier, naviguer ou fermer l’onglet.
-Une notification dans Mémo signale le résultat ou une erreur. Si l’onglet était
-fermé, cette notification apparaît à ton retour. Cliquer sur l’encart ou la
-notification ouvre les résultats.
+Un projet dépassant **250 000 tokens d’entrée**, **1 000 pages au total**,
+**50 Mio par PDF converti**, **20 documents** ou **300 cartes existantes** affiche
+**« Ce projet est trop gros pour la validation »**. Une limite de tokens
+configurée plus basse s’applique également. Aucun document ou texte n’est
+tronqué, et aucun découpage automatique n’est tenté. Une réponse qui ne peut
+pas contenir toutes les cartes nécessaires (maximum 300 propositions et 65 536
+tokens de sortie) produit le même message. Une réponse incomplète, une référence
+invalide ou un doublon produit une erreur sans confirmer la couverture.
+La compréhension du cours et l’exhaustivité des manques restent évaluées par
+l’IA ; les contrôles du serveur vérifient le format et la cohérence du résultat.
 
-Une fenêtre indique **Aucun manque détecté** si cette comparaison ne trouve
-aucune information supplémentaire, ou présente des cartes proposées dans le style
-des cartes existantes. Chaque proposition indique son document et sa page.
-Une page omise, une comparaison incomplète ou une information manquante sans
-proposition provoque une erreur ; l’absence de propositions seule ne confirme
-plus la couverture. Les gros ensembles peuvent demander plusieurs minutes.
-Tu peux accepter ou refuser chaque carte, ou toutes les propositions. Les cartes
-acceptées rejoignent le brouillon ; **Enregistrer les modifications** les conserve.
-Les cartes existantes restent intactes. La comparaison utilise le brouillon
-capturé au lancement ; les modifications ultérieures ne sont pas écrasées.
-Un brouillon non enregistré peut être retrouvé depuis son résultat. Si tu
-crées l’ensemble pendant la validation, le résultat est relié à cet ensemble.
+La validation tourne en arrière-plan. L’encart **Validations** affiche la
+préparation, l’envoi des documents, la vérification de la taille, puis l’analyse
+et la rédaction. Tu peux continuer à modifier des cartes, étudier, naviguer ou
+fermer l’onglet. Une notification signale le résultat ou une erreur ; si l’onglet
+était fermé, elle apparaît à ton retour. Le calcul est limité à 20 minutes.
+
+La fenêtre affiche **Aucun manque détecté** si l’analyse complète ne propose
+aucune carte, ou les propositions à accepter/refuser individuellement ou en
+bloc. Les cartes acceptées rejoignent le brouillon ; **Enregistrer les
+modifications** les conserve. Les cartes existantes restent intactes. L’analyse
+utilise l’instantané capturé au lancement ; les modifications ultérieures ne
+sont pas écrasées. Un brouillon non enregistré peut être retrouvé depuis son
+résultat. Créer l’ensemble pendant la validation relie le résultat à cet ensemble.
 
 Les instantanés et résultats sont privés par compte et conservés sept jours
 (maximum 20 résultats récents par compte) dans
 `$FLASHCARD_WEB_DATA/validation-jobs/`. Une seule validation par compte est
 active à la fois, avec deux analyses simultanées au maximum sur le serveur.
-Un redémarrage du serveur interrompt le calcul : le résultat affiche un bouton
-pour réessayer et reprendre les étapes déjà mises en cache.
+Un redémarrage du serveur interrompt le calcul ; le résultat permet de réessayer.
 
-Une analyse incomplète ou une erreur Gemini affiche une erreur avec possibilité
-de réessayer, sans confirmer la couverture. L’analyse utilise l’IA et peut encore
-omettre ou mal interpréter une information. Limites : 1 000 pages au total,
-50 Mio par PDF converti, 300 cartes dans l’ensemble. Aucun document n’est
-silencieusement écarté lorsque ces limites sont dépassées.
-Les copies envoyées via la [Files API de Gemini](https://ai.google.dev/api/files)
-font l’objet d’une demande de suppression après l’analyse, même en cas d’échec ;
-si cette suppression échoue, elles expirent selon la politique de Google.
-
-Les étapes réussies sont conservées pendant 30 jours dans
+Un résultat complet et vérifié est mis en cache pendant 30 jours dans
 `$FLASHCARD_WEB_DATA/validation-cache/`, avec fichiers privés et écritures
-atomiques. Une relance après un quota reprend les résultats déjà calculés ; une
-validation identique peut ainsi éviter tous les appels Gemini. Le contenu du
-PDF, les notes/commentaires, les cartes, le modèle et les instructions déterminent
-quels résultats restent utilisables. Modifier des cartes conserve l’extraction
-des documents inchangés, puis revérifie les comparaisons concernées. La clé API
-et les liens temporaires Google ne sont jamais stockés dans ce cache.
+atomiques. Une validation identique peut ainsi éviter tous les appels Gemini.
+Le contenu des PDF, les notes/commentaires, les cartes, le modèle, les
+instructions et la limite de tokens déterminent si le résultat reste utilisable.
+Une modification relance la demande complète. Les anciennes étapes de
+l’algorithme découpé ne sont plus utilisées. La clé API et les liens temporaires
+Google ne sont jamais stockés dans le cache.
+Les copies envoyées via la [Files API de Gemini](https://ai.google.dev/api/files)
+font l’objet d’une demande de suppression après l’analyse, même en cas d’échec.
 
-Les validations du serveur partagent un rythme prudent de **5 appels par minute**
-et un budget estimé de **100 000 tokens d’entrée par minute**. Ce sont des réglages
-de Mémo, pas les quotas garantis par Google. Configure `MEMO_GEMINI_RPM` et
-`MEMO_GEMINI_TPM` selon les limites actives de ton projet dans
+Les validations partagent **10 requêtes par minute** et un budget de
+**250 000 tokens d’entrée par minute**, avec réservation du nombre mesuré par
+`countTokens` pour la génération. Les requêtes de comptage sont également
+espacées ; les téléversements utilisent la Files API. Configure
+`MEMO_GEMINI_RPM` et `MEMO_GEMINI_TPM` pour modifier ces réglages.
+Une limite temporaire Gemini par minute peut déclencher jusqu’à deux nouvelles
+tentatives du même appel après le délai indiqué par Google. Les quotas
+quotidiens épuisés ou nuls produisent une erreur sans nouvelle tentative.
+Les quotas Google sont par projet et se consultent dans
 [Google AI Studio](https://aistudio.google.com/usage?tab=rate-limit).
-Une limite temporaire par minute déclenche jusqu’à deux nouvelles tentatives,
-après le délai fourni par Google. Un quota quotidien épuisé ou un quota nul
-produit un message distinct sans multiplier les tentatives. Fermer la fenêtre
-laisse la validation continuer sur le serveur ; les étapes déjà terminées restent disponibles.
-Les quotas Google sont par projet : changer seulement de clé dans le même
-projet ne les augmente pas. Pour augmenter les limites, consulter
-[les niveaux et quotas Gemini](https://ai.google.dev/gemini-api/docs/rate-limits).
 
 ## Moteur d’étude conservé
 
